@@ -7,3 +7,5 @@ Actualizacion 29/5/26 - Se actualizo el apartado de "Exclusion del propio usuari
 Actualizacion 5/6/26 - Se corrigio la Exclusion del propio usuario al editar y se agrego la funcion de validacion por email
 
 Actualizacion 12/6/26 - Se actualizo el codigo con los items completos para el parcial del dia 8/6/26
+
+Actualizacion 19/6/26 - Se Re-organizo el archivo bootstrap.php y se separo la logica en controladores 
