@@ -9,3 +9,5 @@ Actualizacion 5/6/26 - Se corrigio la Exclusion del propio usuario al editar y s
 Actualizacion 12/6/26 - Se actualizo el codigo con los items completos para el parcial del dia 8/6/26
 
 Actualizacion 19/6/26 - Se Re-organizo el archivo bootstrap.php y se separo la logica en controladores 
+
+Actualizacion 3/7/26 - Se actualizo la validacion de contraseña para 8 digitos
