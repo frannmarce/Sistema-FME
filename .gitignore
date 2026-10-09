@@ -1,0 +1,10 @@
+# Configuración privada/local
+.env
+.env.*
+!.env.example
+
+# Archivos del sistema/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
