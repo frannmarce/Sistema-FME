@@ -223,6 +223,53 @@ $idEditar = (int)($_GET['id'] ?? 0);
     </form>
 
             <?php
+    $porPagina = 15;
+    $paginaActual = max(1, (int)($_GET['pagina'] ?? 1));
+
+    $where = " WHERE 1 = 1";
+    $params = [];
+
+    if (!empty($_GET['f_nombre'])) {
+      $where .= " AND p.nombre_persona LIKE ?";
+      $params[] = "%" . $_GET['f_nombre'] . "%";
+    }
+
+    if (!empty($_GET['f_apellido'])) {
+      $where .= " AND p.apellido_persona LIKE ?";
+      $params[] = "%" . $_GET['f_apellido'] . "%";
+    }
+
+    if (!empty($_GET['f_usuario'])) {
+      $where .= " AND u.nombre_usuario LIKE ?";
+      $params[] = "%" . $_GET['f_usuario'] . "%";
+    }
+
+    if (!empty($_GET['f_correo'])) {
+      $where .= " AND u.correo_usuario LIKE ?";
+      $params[] = "%" . $_GET['f_correo'] . "%";
+    }
+
+    if (!empty($_GET['f_cuil'])) {
+      $where .= " AND p.CUIL_persona LIKE ?";
+      $params[] = "%" . $_GET['f_cuil'] . "%";
+    }
+
+    if (!empty($_GET['f_rol'])) {
+      $where .= " AND u.id_rol = ?";
+      $params[] = $_GET['f_rol'];
+    }
+
+    $countSql = "SELECT COUNT(*)
+                 FROM Usuario u
+                 LEFT JOIN Persona p ON u.id_persona = p.id_persona
+                 LEFT JOIN Direccion d ON p.id_direccion = d.id_direccion" . $where;
+    $countStmt = $pdo->prepare($countSql);
+    $countStmt->execute($params);
+    $totalUsuarios = (int)$countStmt->fetchColumn();
+    $totalPaginas = max(1, (int)ceil($totalUsuarios / $porPagina));
+    if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
+    $offset = ($paginaActual - 1) * $porPagina;
+
     $sql = "SELECT
                 u.id_usuario,
                 u.nombre_usuario,
@@ -237,49 +284,24 @@ $idEditar = (int)($_GET['id'] ?? 0);
             FROM Usuario u
             LEFT JOIN Tipo_Rol t ON u.id_rol = t.id_rol
             LEFT JOIN Persona p ON u.id_persona = p.id_persona
-            LEFT JOIN Direccion d ON p.id_direccion = d.id_direccion
-            WHERE 1 = 1";
-
-    $params = [];
-
-    if (!empty($_GET['f_nombre'])) {
-      $sql .= " AND p.nombre_persona LIKE ?";
-      $params[] = "%" . $_GET['f_nombre'] . "%";
-    }
-
-    if (!empty($_GET['f_apellido'])) {
-      $sql .= " AND p.apellido_persona LIKE ?";
-      $params[] = "%" . $_GET['f_apellido'] . "%";
-    }
-
-    if (!empty($_GET['f_usuario'])) {
-      $sql .= " AND u.nombre_usuario LIKE ?";
-      $params[] = "%" . $_GET['f_usuario'] . "%";
-    }
-
-    if (!empty($_GET['f_correo'])) {
-      $sql .= " AND u.correo_usuario LIKE ?";
-      $params[] = "%" . $_GET['f_correo'] . "%";
-    }
-
-    if (!empty($_GET['f_cuil'])) {
-      $sql .= " AND p.CUIL_persona LIKE ?";
-      $params[] = "%" . $_GET['f_cuil'] . "%";
-    }
-
-    if (!empty($_GET['f_rol'])) {
-      $sql .= " AND u.id_rol = ?";
-      $params[] = $_GET['f_rol'];
-    }
-
-    $sql .= " ORDER BY p.apellido_persona, p.nombre_persona, u.nombre_usuario";
+            LEFT JOIN Direccion d ON p.id_direccion = d.id_direccion" . $where .
+           " ORDER BY p.apellido_persona, p.nombre_persona, u.nombre_usuario
+             LIMIT " . $porPagina . " OFFSET " . $offset;
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute($params);
     $usuarios = $stmt->fetchAll();
+
+    $paginaUrl = static function (int $pagina): string {
+      $query = $_GET;
+      $query['mod'] = 'usuarios';
+      $query['pagina'] = $pagina;
+      unset($query['action'], $query['id']);
+      return 'index.php?' . http_build_query($query);
+    };
     ?>
 
-    <h3 class="result-count">Resultados: <?= count($usuarios) ?></h3>
+    <h3 class="result-count">Resultados: <?= $totalUsuarios ?></h3>
 
     <div class="table-responsive">
       <table class="result-table users-table">
@@ -333,6 +355,21 @@ $idEditar = (int)($_GET['id'] ?? 0);
           <?php endif; ?>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination-bar">
+      <div class="pagination-summary">
+        <?= $totalUsuarios ?> usuario<?= $totalUsuarios === 1 ? '' : 's' ?> encontrado<?= $totalUsuarios === 1 ? '' : 's' ?> · Página <?= $paginaActual ?> de <?= $totalPaginas ?>
+      </div>
+      <?php if ($totalPaginas > 1): ?>
+        <nav class="pagination" aria-label="Paginación de usuarios">
+          <a class="page-link <?= $paginaActual <= 1 ? 'disabled' : '' ?>" href="<?= $paginaActual > 1 ? htmlspecialchars($paginaUrl($paginaActual - 1)) : '#' ?>">‹ Anterior</a>
+          <?php for ($paginaNumero = max(1, $paginaActual - 2); $paginaNumero <= min($totalPaginas, $paginaActual + 2); $paginaNumero++): ?>
+            <a class="page-link <?= $paginaNumero === $paginaActual ? 'active' : '' ?>" href="<?= htmlspecialchars($paginaUrl($paginaNumero)) ?>"><?= $paginaNumero ?></a>
+          <?php endfor; ?>
+          <a class="page-link <?= $paginaActual >= $totalPaginas ? 'disabled' : '' ?>" href="<?= $paginaActual < $totalPaginas ? htmlspecialchars($paginaUrl($paginaActual + 1)) : '#' ?>">Siguiente ›</a>
+        </nav>
+      <?php endif; ?>
     </div>
   </div>
 

@@ -132,6 +132,15 @@ if (!isset($modulosPermitidosConArchivo['perfiles'])) {
 <?php else: ?>
 
   <?php
+  $porPagina = 15;
+  $paginaActual = max(1, (int)($_GET['pagina'] ?? 1));
+
+  $countStmt = $pdo->query('SELECT COUNT(*) FROM Tipo_Rol');
+  $totalPerfiles = (int)$countStmt->fetchColumn();
+  $totalPaginas = max(1, (int)ceil($totalPerfiles / $porPagina));
+  if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
+  $offset = ($paginaActual - 1) * $porPagina;
+
   $stmt = $pdo->query("SELECT
                           r.id_rol,
                           r.nombre_rol,
@@ -143,8 +152,17 @@ if (!isset($modulosPermitidosConArchivo['perfiles'])) {
                        LEFT JOIN Usuario u ON u.id_rol = r.id_rol
                        LEFT JOIN Rol_Modulo rm ON rm.id_rol = r.id_rol
                        GROUP BY r.id_rol, r.nombre_rol, r.descripcion_rol, r.activo
-                       ORDER BY r.id_rol");
+                       ORDER BY r.id_rol
+                       LIMIT " . $porPagina . " OFFSET " . $offset);
   $perfiles = $stmt->fetchAll();
+
+  $paginaUrl = static function (int $pagina): string {
+    $query = $_GET;
+    $query['mod'] = 'perfiles';
+    $query['pagina'] = $pagina;
+    unset($query['action'], $query['id']);
+    return 'index.php?' . http_build_query($query);
+  };
   ?>
 
   <div class="profile-card users-card">
@@ -159,7 +177,7 @@ if (!isset($modulosPermitidosConArchivo['perfiles'])) {
       </div>
     </div>
 
-    <h3 class="result-count">Resultados: <?= count($perfiles) ?></h3>
+    <h3 class="result-count">Resultados: <?= $totalPerfiles ?></h3>
 
     <div class="table-responsive">
       <table class="result-table">
@@ -213,6 +231,21 @@ if (!isset($modulosPermitidosConArchivo['perfiles'])) {
           <?php endif; ?>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination-bar">
+      <div class="pagination-summary">
+        <?= $totalPerfiles ?> perfil<?= $totalPerfiles === 1 ? '' : 'es' ?> encontrado<?= $totalPerfiles === 1 ? '' : 's' ?> · Página <?= $paginaActual ?> de <?= $totalPaginas ?>
+      </div>
+      <?php if ($totalPaginas > 1): ?>
+        <nav class="pagination" aria-label="Paginación de perfiles">
+          <a class="page-link <?= $paginaActual <= 1 ? 'disabled' : '' ?>" href="<?= $paginaActual > 1 ? htmlspecialchars($paginaUrl($paginaActual - 1)) : '#' ?>">‹ Anterior</a>
+          <?php for ($paginaNumero = max(1, $paginaActual - 2); $paginaNumero <= min($totalPaginas, $paginaActual + 2); $paginaNumero++): ?>
+            <a class="page-link <?= $paginaNumero === $paginaActual ? 'active' : '' ?>" href="<?= htmlspecialchars($paginaUrl($paginaNumero)) ?>"><?= $paginaNumero ?></a>
+          <?php endfor; ?>
+          <a class="page-link <?= $paginaActual >= $totalPaginas ? 'disabled' : '' ?>" href="<?= $paginaActual < $totalPaginas ? htmlspecialchars($paginaUrl($paginaActual + 1)) : '#' ?>">Siguiente ›</a>
+        </nav>
+      <?php endif; ?>
     </div>
   </div>
 

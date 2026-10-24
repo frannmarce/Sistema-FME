@@ -506,6 +506,10 @@ $paginaUrl = static function (int $pagina): string {
               <?php endif; ?>
             </td>
             <td class="actions-cell">
+              <a class="btn-secondary-link compact-btn"
+                 href="actions/factura_venta.php?id=<?= (int)$v['id_venta'] ?>"
+                 target="_blank" rel="noopener"
+                 title="Abrir factura PDF para imprimir">🖨 Imprimir factura</a>
               <?php if (!$esCancelada): ?>
                 <a class="btn-danger compact-btn" href="index.php?mod=ventas&action=cancel&id=<?= (int)$v['id_venta'] ?>">Cancelar venta</a>
               <?php else: ?>

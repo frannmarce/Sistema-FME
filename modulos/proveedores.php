@@ -146,30 +146,52 @@ if ($action === 'edit' && isset($_GET['id'])):
 return;
 endif;
 
+$porPagina = 15;
+$paginaActual = max(1, (int)($_GET['pagina'] ?? 1));
+$where = ' WHERE 1=1';
+$params = [];
+
+if ($busqueda !== '') {
+  $where .= " AND (pr.nombre_proveedor LIKE ? OR pr.correo_proveedor LIKE ? OR pr.telefono_proveedor LIKE ?)";
+  $like = '%' . $busqueda . '%';
+  array_push($params, $like, $like, $like);
+}
+if ($ciudad !== '') {
+  $where .= " AND d.nombre_ciudad LIKE ?";
+  $params[] = '%' . $ciudad . '%';
+}
+
+$countSql = "SELECT COUNT(*)
+             FROM Proveedor pr
+             LEFT JOIN Direccion d ON pr.id_direccion = d.id_direccion" . $where;
+$countStmt = $pdo->prepare($countSql);
+$countStmt->execute($params);
+$totalProveedores = (int)$countStmt->fetchColumn();
+$totalPaginas = max(1, (int)ceil($totalProveedores / $porPagina));
+if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
+$offset = ($paginaActual - 1) * $porPagina;
+
 $sql = "SELECT pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
                d.nombre_pais, d.nombre_ciudad, d.num_direccion,
                COUNT(p.id_producto) AS productos_asignados
         FROM Proveedor pr
         LEFT JOIN Direccion d ON pr.id_direccion = d.id_direccion
-        LEFT JOIN Producto p ON pr.id_proveedor = p.id_proveedor
-        WHERE 1=1";
-$params = [];
-
-if ($busqueda !== '') {
-  $sql .= " AND (pr.nombre_proveedor LIKE ? OR pr.correo_proveedor LIKE ? OR pr.telefono_proveedor LIKE ?)";
-  $like = '%' . $busqueda . '%';
-  array_push($params, $like, $like, $like);
-}
-if ($ciudad !== '') {
-  $sql .= " AND d.nombre_ciudad LIKE ?";
-  $params[] = '%' . $ciudad . '%';
-}
-$sql .= " GROUP BY pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
-                   d.nombre_pais, d.nombre_ciudad, d.num_direccion
-          ORDER BY pr.nombre_proveedor ASC";
+        LEFT JOIN Producto p ON pr.id_proveedor = p.id_proveedor" . $where .
+       " GROUP BY pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
+                  d.nombre_pais, d.nombre_ciudad, d.num_direccion
+         ORDER BY pr.nombre_proveedor ASC
+         LIMIT " . $porPagina . " OFFSET " . $offset;
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $proveedores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$paginaUrl = static function (int $pagina): string {
+  $query = $_GET;
+  $query['mod'] = 'proveedores';
+  $query['pagina'] = $pagina;
+  unset($query['action'], $query['id']);
+  return 'index.php?' . http_build_query($query);
+};
 ?>
 
 <h1 class="title">Proveedores</h1>
@@ -206,6 +228,8 @@ $proveedores = $stmt->fetchAll(PDO::FETCH_ASSOC);
       </div>
     </form>
   </div>
+
+  <h3 class="result-count">Resultados: <?= $totalProveedores ?></h3>
 
   <div class="table-responsive">
     <table class="result-table">
@@ -244,5 +268,20 @@ $proveedores = $stmt->fetchAll(PDO::FETCH_ASSOC);
       <?php endif; ?>
       </tbody>
     </table>
+  </div>
+
+  <div class="pagination-bar">
+    <div class="pagination-summary">
+      <?= $totalProveedores ?> proveedor<?= $totalProveedores === 1 ? '' : 'es' ?> encontrado<?= $totalProveedores === 1 ? '' : 's' ?> · Página <?= $paginaActual ?> de <?= $totalPaginas ?>
+    </div>
+    <?php if ($totalPaginas > 1): ?>
+      <nav class="pagination" aria-label="Paginación de proveedores">
+        <a class="page-link <?= $paginaActual <= 1 ? 'disabled' : '' ?>" href="<?= $paginaActual > 1 ? htmlspecialchars($paginaUrl($paginaActual - 1)) : '#' ?>">‹ Anterior</a>
+        <?php for ($paginaNumero = max(1, $paginaActual - 2); $paginaNumero <= min($totalPaginas, $paginaActual + 2); $paginaNumero++): ?>
+          <a class="page-link <?= $paginaNumero === $paginaActual ? 'active' : '' ?>" href="<?= htmlspecialchars($paginaUrl($paginaNumero)) ?>"><?= $paginaNumero ?></a>
+        <?php endfor; ?>
+        <a class="page-link <?= $paginaActual >= $totalPaginas ? 'disabled' : '' ?>" href="<?= $paginaActual < $totalPaginas ? htmlspecialchars($paginaUrl($paginaActual + 1)) : '#' ?>">Siguiente ›</a>
+      </nav>
+    <?php endif; ?>
   </div>
 </div>

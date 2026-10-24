@@ -4,6 +4,17 @@ $auditorias = [];
 $auditoriaModulos = [];
 $auditoriaAcciones = [];
 $auditoriaError = null;
+$auditoriaPorPagina = 15;
+$auditoriaPaginaActual = 1;
+$auditoriaTotalRegistros = 0;
+$auditoriaTotalPaginas = 1;
+$auditoriaPaginaUrl = static function (int $pagina): string {
+    $query = $_GET;
+    $query['mod'] = 'auditoria';
+    $query['pagina'] = max(1, $pagina);
+    unset($query['action'], $query['id']);
+    return 'index.php?' . http_build_query($query);
+};
 
 if ($modActual === 'auditoria') {
     $fUsuario = trim((string) ($_GET['f_usuario'] ?? ''));
@@ -11,6 +22,7 @@ if ($modActual === 'auditoria') {
     $fAccion  = trim((string) ($_GET['f_accion'] ?? ''));
     $fDesde   = trim((string) ($_GET['f_desde'] ?? ''));
     $fHasta   = trim((string) ($_GET['f_hasta'] ?? ''));
+    $auditoriaPaginaActual = max(1, (int) ($_GET['pagina'] ?? 1));
 
     $fechaValida = static function (string $fecha): bool {
         if ($fecha === '') {
@@ -35,34 +47,46 @@ if ($modActual === 'auditoria') {
             "SELECT DISTINCT accion FROM Auditoria WHERE accion <> '' ORDER BY accion ASC"
         )->fetchAll(PDO::FETCH_COLUMN);
 
-        $sql = 'SELECT id_auditoria, id_usuario, usuario_nombre, modulo, accion,
-                       entidad, id_registro, detalle, ip_origen, fecha_auditoria
-                FROM Auditoria
-                WHERE 1 = 1';
+        $where = ' WHERE 1 = 1';
         $params = [];
 
         if ($fUsuario !== '') {
-            $sql .= ' AND usuario_nombre LIKE ?';
+            $where .= ' AND usuario_nombre LIKE ?';
             $params[] = '%' . $fUsuario . '%';
         }
         if ($fModulo !== '') {
-            $sql .= ' AND modulo = ?';
+            $where .= ' AND modulo = ?';
             $params[] = $fModulo;
         }
         if ($fAccion !== '') {
-            $sql .= ' AND accion = ?';
+            $where .= ' AND accion = ?';
             $params[] = $fAccion;
         }
         if ($fDesde !== '') {
-            $sql .= ' AND fecha_auditoria >= ?';
+            $where .= ' AND fecha_auditoria >= ?';
             $params[] = $fDesde . ' 00:00:00';
         }
         if ($fHasta !== '') {
-            $sql .= ' AND fecha_auditoria <= ?';
+            $where .= ' AND fecha_auditoria <= ?';
             $params[] = $fHasta . ' 23:59:59';
         }
 
-        $sql .= ' ORDER BY fecha_auditoria DESC, id_auditoria DESC LIMIT 200';
+        $countStmt = $pdo->prepare('SELECT COUNT(*) FROM Auditoria' . $where);
+        $countStmt->execute($params);
+        $auditoriaTotalRegistros = (int) $countStmt->fetchColumn();
+        $auditoriaTotalPaginas = max(1, (int) ceil($auditoriaTotalRegistros / $auditoriaPorPagina));
+
+        if ($auditoriaPaginaActual > $auditoriaTotalPaginas) {
+            $auditoriaPaginaActual = $auditoriaTotalPaginas;
+        }
+
+        $offset = ($auditoriaPaginaActual - 1) * $auditoriaPorPagina;
+
+        $sql = 'SELECT id_auditoria, id_usuario, usuario_nombre, modulo, accion,
+                       entidad, id_registro, detalle, ip_origen, fecha_auditoria
+                FROM Auditoria' . $where . '
+                ORDER BY fecha_auditoria DESC, id_auditoria DESC
+                LIMIT ' . $auditoriaPorPagina . ' OFFSET ' . $offset;
 
         $stmt = $pdo->prepare($sql);
         $stmt->execute($params);

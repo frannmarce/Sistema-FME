@@ -76,7 +76,7 @@ $fHasta   = trim((string) ($_GET['f_hasta'] ?? ''));
   <?php if ($auditoriaError): ?>
     <div class="module-warning"><?= htmlspecialchars($auditoriaError) ?></div>
   <?php else: ?>
-    <h3 class="result-count">Resultados mostrados: <?= count($auditorias) ?><?= count($auditorias) === 200 ? ' (límite 200)' : '' ?></h3>
+    <h3 class="result-count">Registros encontrados: <?= $auditoriaTotalRegistros ?></h3>
 
     <div class="table-responsive">
       <table class="result-table audit-table">
@@ -143,6 +143,21 @@ $fHasta   = trim((string) ($_GET['f_hasta'] ?? ''));
         <?php endif; ?>
         </tbody>
       </table>
+    </div>
+
+    <div class="pagination-bar">
+      <div class="pagination-summary">
+        <?= $auditoriaTotalRegistros ?> registro<?= $auditoriaTotalRegistros === 1 ? '' : 's' ?> encontrado<?= $auditoriaTotalRegistros === 1 ? '' : 's' ?> · Página <?= $auditoriaPaginaActual ?> de <?= $auditoriaTotalPaginas ?>
+      </div>
+      <?php if ($auditoriaTotalPaginas > 1): ?>
+        <nav class="pagination" aria-label="Paginación de auditoría">
+          <a class="page-link <?= $auditoriaPaginaActual <= 1 ? 'disabled' : '' ?>" href="<?= $auditoriaPaginaActual > 1 ? htmlspecialchars($auditoriaPaginaUrl($auditoriaPaginaActual - 1)) : '#' ?>">‹ Anterior</a>
+          <?php for ($p = max(1, $auditoriaPaginaActual - 2); $p <= min($auditoriaTotalPaginas, $auditoriaPaginaActual + 2); $p++): ?>
+            <a class="page-link <?= $p === $auditoriaPaginaActual ? 'active' : '' ?>" href="<?= htmlspecialchars($auditoriaPaginaUrl($p)) ?>"><?= $p ?></a>
+          <?php endfor; ?>
+          <a class="page-link <?= $auditoriaPaginaActual >= $auditoriaTotalPaginas ? 'disabled' : '' ?>" href="<?= $auditoriaPaginaActual < $auditoriaTotalPaginas ? htmlspecialchars($auditoriaPaginaUrl($auditoriaPaginaActual + 1)) : '#' ?>">Siguiente ›</a>
+        </nav>
+      <?php endif; ?>
     </div>
   <?php endif; ?>
 </div>
