@@ -109,6 +109,15 @@ if (!in_array($f_origen, ['', 'MANUAL', 'VENTA', 'CANCELACION_VENTA'], true)) $f
     <?php endif; ?>
 
     <div class="profile-actions" style="text-align:right; margin-bottom:15px;">
+      <a class="btn-icon" href="actions/export_movimientos.php?<?= htmlspecialchars(http_build_query([
+        'f_producto' => $f_producto,
+        'f_usuario' => $f_usuario,
+        'f_tipo' => $f_tipo,
+        'f_motivo' => $f_motivo,
+        'f_origen' => $f_origen,
+        'f_desde' => $f_desde,
+        'f_hasta' => $f_hasta,
+      ])) ?>" title="Exportar listado a Excel" aria-label="Exportar listado a Excel">📊</a>
       <a class="btn-add" href="index.php?mod=movimientos&action=add">➕ Registrar ajuste manual</a>
     </div>
 

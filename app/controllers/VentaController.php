@@ -12,16 +12,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
 
   $form = $_POST['form'] ?? '';
 
+  // Facturación/Ventas solo puede operar con una caja abierta del día actual.
+  $estadoCajaVenta = obtenerEstadoOperativoCaja($pdo);
+  if (empty($estadoCajaVenta['habilita_ventas'])) {
+    $mensajeCaja = (string)($estadoCajaVenta['mensaje'] ?? 'Debes abrir la caja antes de operar con ventas.');
+    flash('error', $mensajeCaja . ' Ingresa al módulo Caja para continuar.');
+    header('Location: index.php?mod=caja');
+    exit;
+  }
+  $idCajaVenta = (int)($estadoCajaVenta['caja']['id_caja'] ?? 0);
+  if ($idCajaVenta <= 0) {
+    flash('error', 'No se pudo identificar la caja abierta del día.');
+    header('Location: index.php?mod=caja');
+    exit;
+  }
+
   /* =========================
      REGISTRAR VENTA
      ========================= */
   if ($form === 'add_venta') {
-    $idMedio = (int)($_POST['id_medio'] ?? 0);
     $productosPost = $_POST['id_producto'] ?? [];
     $cantidadesPost = $_POST['cantidad'] ?? [];
+    $mediosPost = $_POST['pago_id_medio'] ?? [];
+    $montosPost = $_POST['pago_monto'] ?? [];
 
     $errores = [];
-    if ($idMedio <= 0) $errores[] = 'Debe seleccionar un medio de pago.';
+    if (!is_array($mediosPost) || !is_array($montosPost) || count($mediosPost) === 0) {
+      $errores[] = 'Debe indicar al menos un medio de pago.';
+    }
     if (!is_array($productosPost) || !is_array($cantidadesPost) || count($productosPost) === 0) {
       $errores[] = 'Debe agregar al menos un producto a la venta.';
     }
@@ -41,6 +59,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
       $items[$idProducto] = ($items[$idProducto] ?? 0) + (int)$cantidadRaw;
     }
 
+    // Agrupamos medios repetidos. El importe llega desde inputs number con dos decimales.
+    $pagos = [];
+    $cantidadPagos = min(count((array)$mediosPost), count((array)$montosPost));
+    for ($i = 0; $i < $cantidadPagos; $i++) {
+      $idMedioPago = (int)$mediosPost[$i];
+      $montoRaw = trim((string)$montosPost[$i]);
+      $montoNormalizado = str_replace(',', '.', $montoRaw);
+
+      if ($idMedioPago <= 0 || $montoNormalizado === '' || !is_numeric($montoNormalizado)) {
+        $errores[] = 'Todos los pagos deben tener un medio y un monto válido.';
+        break;
+      }
+
+      $montoPago = round((float)$montoNormalizado, 2);
+      if ($montoPago <= 0) {
+        $errores[] = 'Los montos de pago deben ser mayores a cero.';
+        break;
+      }
+      $pagos[$idMedioPago] = round(($pagos[$idMedioPago] ?? 0) + $montoPago, 2);
+    }
+
+    if (!$pagos && !$errores) {
+      $errores[] = 'Debe indicar al menos un medio de pago.';
+    }
+
     if ($errores) {
       flash('error', implode(' ', $errores));
       header('Location: index.php?mod=ventas&action=add');
@@ -49,12 +92,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
 
     try {
       $pdo->beginTransaction();
-
-      $stmt = $pdo->prepare('SELECT id_medio FROM Medio_pago WHERE id_medio = ? LIMIT 1');
-      $stmt->execute([$idMedio]);
-      if (!$stmt->fetchColumn()) {
-        throw new RuntimeException('El medio de pago seleccionado no existe.');
-      }
 
       // Buscamos los IDs por nombre para no depender de IDs fijos en la base.
       $stmt = $pdo->query("SELECT id_tipo FROM Tipo_movimiento WHERE LOWER(nombre_tipo) = 'salida' LIMIT 1");
@@ -102,11 +139,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
         throw new RuntimeException('La venta no contiene productos válidos.');
       }
 
+      $totalPagos = round(array_sum($pagos), 2);
+      if (abs($totalPagos - $totalVenta) > 0.009) {
+        throw new RuntimeException(
+          'La suma de los medios de pago ($' . number_format($totalPagos, 2, ',', '.') .
+          ') debe coincidir exactamente con el total de la venta ($' . number_format($totalVenta, 2, ',', '.') . ').'
+        );
+      }
+
+      // Validamos todos los medios y evitamos que "Mixto" pueda cargarse como un pago real.
+      $idsMedio = array_keys($pagos);
+      $placeholders = implode(',', array_fill(0, count($idsMedio), '?'));
+      $stmt = $pdo->prepare("SELECT id_medio, nombre_medio FROM Medio_pago WHERE id_medio IN ($placeholders)");
+      $stmt->execute($idsMedio);
+      $mediosValidos = [];
+      foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $medio) {
+        if (mb_strtolower(trim((string)$medio['nombre_medio'])) === 'mixto') {
+          throw new RuntimeException('El medio Mixto es de uso interno y no puede seleccionarse manualmente.');
+        }
+        $mediosValidos[(int)$medio['id_medio']] = (string)$medio['nombre_medio'];
+      }
+      if (count($mediosValidos) !== count($idsMedio)) {
+        throw new RuntimeException('Uno de los medios de pago seleccionados no existe.');
+      }
+
+      if (count($pagos) > 1) {
+        $stmt = $pdo->query("SELECT id_medio FROM Medio_pago WHERE LOWER(nombre_medio) = 'mixto' LIMIT 1");
+        $idMedioVenta = (int)($stmt->fetchColumn() ?: 0);
+        if ($idMedioVenta <= 0) {
+          throw new RuntimeException('Falta ejecutar la migración de Pago mixto para configurar el medio interno Mixto.');
+        }
+      } else {
+        $idMedioVenta = (int)array_key_first($pagos);
+      }
+
       $stmt = $pdo->prepare("INSERT INTO Venta
-        (fecha_venta, total_venta, estado_venta, id_usuario, id_medio)
-        VALUES (NOW(), ?, 'ACTIVA', ?, ?)");
-      $stmt->execute([$totalVenta, $userId, $idMedio]);
+        (fecha_venta, total_venta, estado_venta, id_usuario, id_medio, id_caja)
+        VALUES (NOW(), ?, 'ACTIVA', ?, ?, ?)");
+      $stmt->execute([$totalVenta, $userId, $idMedioVenta, $idCajaVenta]);
       $idVenta = (int)$pdo->lastInsertId();
+
+      $stmtPago = $pdo->prepare('INSERT INTO Venta_Pago (id_venta, id_medio, monto) VALUES (?, ?, ?)');
+      foreach ($pagos as $idMedioPago => $montoPago) {
+        $stmtPago->execute([$idVenta, (int)$idMedioPago, $montoPago]);
+      }
 
       $stmtDetalle = $pdo->prepare('INSERT INTO Detalle_venta (id_venta, id_producto, cantidad_detalle, precio_unitario)
                                     VALUES (?, ?, ?, ?)');
@@ -133,7 +209,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
       $pdo->commit();
       registrarAuditoria($pdo, 'ventas', 'CREAR', 'Venta', $idVenta, [
         'total' => $totalVenta,
-        'medio_pago_id' => $idMedio,
+        'medios_pago' => array_map(
+          static fn($id, $monto) => [
+            'id_medio' => (int)$id,
+            'medio' => $mediosValidos[(int)$id] ?? 'Desconocido',
+            'monto' => (float)$monto,
+          ],
+          array_keys($pagos),
+          array_values($pagos)
+        ),
+        'caja_id' => $idCajaVenta,
         'productos_distintos' => count($detalle),
         'estado' => 'ACTIVA',
       ]);

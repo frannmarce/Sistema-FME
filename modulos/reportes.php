@@ -111,6 +111,41 @@ $stockBajo = $pdo->query("SELECT nombre_producto, stock_producto
     <div class="report-kpi <?= (int)$stockResumen['stock_bajo'] > 0 ? 'kpi-warning' : '' ?>"><span>Stock bajo (≤ 5)</span><strong><?= (int)$stockResumen['stock_bajo'] ?></strong><small>requieren atención</small></div>
   </div>
 
+  <div class="profile-card wide-card">
+    <div class="profile-card-header">
+      <div class="profile-icon">💳</div>
+      <div>
+        <h2>Ventas de hoy</h2>
+        <p>Facturación activa del día desglosada por medio de pago. No representa ganancia.</p>
+      </div>
+    </div>
+    <?php if ($ventasHoyError): ?>
+      <div class="module-warning"><?= htmlspecialchars($ventasHoyError) ?></div>
+    <?php else: ?>
+      <div class="table-responsive">
+        <table class="result-table">
+          <thead><tr><th>Medio de pago</th><th>Ventas que lo usaron</th><th>Importe</th></tr></thead>
+          <tbody>
+          <?php if (!$ventasHoyPorMedio): ?>
+            <tr><td colspan="3" class="empty-cell">Todavía no hay ventas activas registradas hoy.</td></tr>
+          <?php else: ?>
+            <?php foreach ($ventasHoyPorMedio as $medioHoy): ?>
+              <tr>
+                <td><?= htmlspecialchars($medioHoy['medio']) ?></td>
+                <td><?= (int)$medioHoy['cantidad_ventas'] ?></td>
+                <td><strong>$<?= number_format((float)$medioHoy['total'], 2, ',', '.') ?></strong></td>
+              </tr>
+            <?php endforeach; ?>
+          <?php endif; ?>
+          </tbody>
+          <tfoot>
+            <tr><th colspan="2">Total vendido hoy (<?= $ventasHoyCantidad ?> venta<?= $ventasHoyCantidad === 1 ? '' : 's' ?>)</th><th>$<?= number_format($ventasHoyTotal, 2, ',', '.') ?></th></tr>
+          </tfoot>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
+
   <div class="report-grid">
     <div class="profile-card wide-card">
       <div class="profile-card-header"><div class="profile-icon">🏆</div><div><h2>Productos más vendidos</h2><p>Top 10 por unidades registradas en el período.</p></div></div>

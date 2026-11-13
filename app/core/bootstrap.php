@@ -157,6 +157,7 @@ require_once __DIR__ . '/../controllers/PerfilController.php';
 require_once __DIR__ . '/../controllers/ProductoController.php';
 require_once __DIR__ . '/../controllers/MovimientoController.php';
 require_once __DIR__ . '/../controllers/ProveedorController.php';
+require_once __DIR__ . '/../controllers/CajaController.php';
 require_once __DIR__ . '/../controllers/VentaController.php';
 require_once __DIR__ . '/../controllers/ReporteController.php';
 require_once __DIR__ . '/../controllers/AuditoriaController.php';

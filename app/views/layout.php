@@ -20,7 +20,7 @@ foreach ($modulos as $menuItem) {
 }
 
 $menuGroups = [
-    'Operaciones' => ['productos', 'movimientos', 'ventas', 'proveedores'],
+    'Operaciones' => ['productos', 'movimientos', 'caja', 'ventas', 'proveedores'],
     'Análisis' => ['reportes'],
     'Administración' => ['usuarios', 'perfiles', 'auditoria'],
     'Soporte' => ['ayuda'],

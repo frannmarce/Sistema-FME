@@ -1,10 +1,39 @@
 <?php
+$estadoCajaVentas = obtenerEstadoOperativoCaja($pdo);
+$ventasHabilitadas = !empty($estadoCajaVentas['habilita_ventas']);
+
+if (!$ventasHabilitadas):
+  $codigoCaja = (string)($estadoCajaVentas['codigo'] ?? '');
+  $cajaBloqueada = $estadoCajaVentas['caja'] ?? null;
+  if ($codigoCaja === 'PENDIENTE_CIERRE_ANTERIOR' && $cajaBloqueada) {
+    $mensajeCajaVentas = 'La caja del ' . date('d/m/Y', strtotime((string)$cajaBloqueada['fecha_caja'])) . ' sigue abierta. Debes cerrarla y luego abrir la caja de hoy antes de usar Facturación / Ventas.';
+  } elseif ($codigoCaja === 'CERRADA_HOY') {
+    $mensajeCajaVentas = 'La caja de hoy ya fue cerrada. Facturación / Ventas permanecerá bloqueado hasta que corresponda abrir una nueva caja diaria.';
+  } elseif ($codigoCaja === 'NO_CONFIGURADA') {
+    $mensajeCajaVentas = 'El módulo Caja todavía no está configurado. Ejecuta la migración de Caja antes de utilizar Facturación / Ventas.';
+  } else {
+    $mensajeCajaVentas = 'Debes abrir la caja de hoy antes de utilizar Facturación / Ventas.';
+  }
+?>
+<div class="modal-overlay">
+  <div class="modal-box">
+    <div class="modal-icon">💵</div>
+    <h2 class="modal-title">Caja requerida</h2>
+    <p class="modal-body"><?= htmlspecialchars($mensajeCajaVentas) ?></p>
+    <div class="modal-actions">
+      <a href="index.php?mod=caja" class="modal-btn">Ir al módulo Caja</a>
+    </div>
+  </div>
+</div>
+<?php
+endif;
+
 $productosVenta = $pdo->query("SELECT id_producto, nombre_producto, codigo_barras, precio_producto, stock_producto
                                 FROM Producto
                                 WHERE activo_producto = 1
                                   AND stock_producto > 0
                                 ORDER BY nombre_producto ASC")->fetchAll(PDO::FETCH_ASSOC);
-$mediosPago = $pdo->query("SELECT id_medio, nombre_medio FROM Medio_pago ORDER BY nombre_medio ASC")->fetchAll(PDO::FETCH_ASSOC);
+$mediosPago = $pdo->query("SELECT id_medio, nombre_medio FROM Medio_pago WHERE LOWER(nombre_medio) <> 'mixto' ORDER BY nombre_medio ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 if ($action === 'add'):
 ?>
@@ -78,16 +107,38 @@ if ($action === 'add'):
     </div>
 
     <div class="profile-section">
-      <h3>Pago y total</h3>
+      <div class="section-heading-row">
+        <div>
+          <h3>Pago y total</h3>
+          <p class="section-help">Puedes usar un único medio o dividir el total entre varios medios de pago.</p>
+        </div>
+        <button class="btn-add compact-btn" type="button" id="agregarPago">+ Agregar medio</button>
+      </div>
+
+      <div id="ventaPagos" class="sale-items">
+        <div class="payment-row profile-grid">
+          <div class="form-group">
+            <label class="label">Medio de pago</label>
+            <select class="input pago-medio-select" name="pago_id_medio[]" required <?= !$mediosPago ? 'disabled' : '' ?>>
+              <option value="">Seleccione...</option>
+              <?php foreach ($mediosPago as $m): ?>
+                <option value="<?= (int)$m['id_medio'] ?>"><?= htmlspecialchars($m['nombre_medio']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="label">Monto</label>
+            <input class="input pago-monto-input" type="number" name="pago_monto[]" min="0.01" step="0.01" value="0.00" required>
+          </div>
+          <button class="remove-item-btn remove-payment-btn" type="button" title="Quitar medio de pago" aria-label="Quitar medio de pago">×</button>
+        </div>
+      </div>
+
       <div class="profile-grid">
-        <div class="form-group">
-          <label class="label">Medio de pago</label>
-          <select class="input" name="id_medio" required <?= !$mediosPago ? 'disabled' : '' ?>>
-            <option value="">Seleccione...</option>
-            <?php foreach ($mediosPago as $m): ?>
-              <option value="<?= (int)$m['id_medio'] ?>"><?= htmlspecialchars($m['nombre_medio']) ?></option>
-            <?php endforeach; ?>
-          </select>
+        <div class="sale-total-box">
+          <span>Pagos cargados</span>
+          <strong id="pagoTotal">$0,00</strong>
+          <small id="pagoRestante" class="field-help">Restante: $0,00</small>
         </div>
         <div class="sale-total-box">
           <span>Total estimado</span>
@@ -110,7 +161,14 @@ if ($action === 'add'):
   const totalEl = document.getElementById('ventaTotal');
   const barcodeInput = document.getElementById('codigoBarrasVenta');
   const barcodeStatus = document.getElementById('barcodeScanStatus');
-  if (!container || !addBtn || !totalEl) return;
+  const paymentsContainer = document.getElementById('ventaPagos');
+  const addPaymentBtn = document.getElementById('agregarPago');
+  const paymentTotalEl = document.getElementById('pagoTotal');
+  const paymentRemainingEl = document.getElementById('pagoRestante');
+  const ventaForm = document.getElementById('ventaForm');
+  if (!container || !addBtn || !totalEl || !paymentsContainer) return;
+
+  let currentSaleTotal = 0;
 
   const money = value => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value || 0);
 
@@ -128,7 +186,57 @@ if ($action === 'add'):
       row.querySelector('.subtotal-display').textContent = money(subtotal);
       total += subtotal;
     });
-    totalEl.textContent = money(total);
+    currentSaleTotal = Math.round(total * 100) / 100;
+    totalEl.textContent = money(currentSaleTotal);
+    updatePayments();
+  }
+
+  function paymentRows() {
+    return Array.from(paymentsContainer.querySelectorAll('.payment-row'));
+  }
+
+  function updatePayments() {
+    const rows = paymentRows();
+    if (rows.length === 1) {
+      const input = rows[0].querySelector('.pago-monto-input');
+      if (input) input.value = currentSaleTotal.toFixed(2);
+    }
+
+    let paid = 0;
+    rows.forEach(row => {
+      paid += Math.max(0, parseFloat(row.querySelector('.pago-monto-input')?.value || '0'));
+    });
+    paid = Math.round(paid * 100) / 100;
+    const remaining = Math.round((currentSaleTotal - paid) * 100) / 100;
+    if (paymentTotalEl) paymentTotalEl.textContent = money(paid);
+    if (paymentRemainingEl) {
+      paymentRemainingEl.textContent = Math.abs(remaining) < 0.01
+        ? 'Pagos completos'
+        : (remaining > 0 ? 'Restante: ' + money(remaining) : 'Exceso: ' + money(Math.abs(remaining)));
+    }
+  }
+
+  function bindPaymentRow(row) {
+    row.querySelector('.pago-monto-input')?.addEventListener('input', updatePayments);
+    row.querySelector('.pago-medio-select')?.addEventListener('change', updatePayments);
+    row.querySelector('.remove-payment-btn')?.addEventListener('click', () => {
+      if (paymentRows().length > 1) {
+        row.remove();
+        updatePayments();
+      }
+    });
+  }
+
+  function addPaymentRow() {
+    const first = paymentsContainer.querySelector('.payment-row');
+    if (!first) return null;
+    const clone = first.cloneNode(true);
+    clone.querySelector('.pago-medio-select').selectedIndex = 0;
+    clone.querySelector('.pago-monto-input').value = '0.00';
+    bindPaymentRow(clone);
+    paymentsContainer.appendChild(clone);
+    updatePayments();
+    return clone;
   }
 
   function bindRow(row) {
@@ -225,6 +333,27 @@ if ($action === 'add'):
     barcodeInput.focus();
   });
 
+  paymentRows().forEach(bindPaymentRow);
+  addPaymentBtn?.addEventListener('click', addPaymentRow);
+
+  ventaForm?.addEventListener('submit', event => {
+    const rows = paymentRows();
+    const methods = rows.map(row => row.querySelector('.pago-medio-select')?.value || '').filter(Boolean);
+    let paid = 0;
+    rows.forEach(row => { paid += Math.max(0, parseFloat(row.querySelector('.pago-monto-input')?.value || '0')); });
+    paid = Math.round(paid * 100) / 100;
+
+    if (!methods.length || methods.length !== rows.length) {
+      event.preventDefault();
+      alert('Selecciona un medio para cada pago.');
+      return;
+    }
+    if (Math.abs(paid - currentSaleTotal) > 0.009) {
+      event.preventDefault();
+      alert('La suma de los pagos debe coincidir exactamente con el total de la venta.');
+    }
+  });
+
   updateTotals();
 })();
 </script>
@@ -245,11 +374,10 @@ if ($action === 'cancel'):
   } else {
     $stmt = $pdo->prepare("SELECT v.id_venta, v.fecha_venta, v.total_venta, v.estado_venta,
                                   cv.id_cancelacion,
-                                  u.nombre_usuario, mp.nombre_medio
+                                  u.nombre_usuario
                            FROM Venta v
                            LEFT JOIN Cancelacion_Venta cv ON cv.id_venta = v.id_venta
                            LEFT JOIN Usuario u ON u.id_usuario = v.id_usuario
-                           LEFT JOIN Medio_pago mp ON mp.id_medio = v.id_medio
                            WHERE v.id_venta = ?
                            LIMIT 1");
     $stmt->execute([$idCancelacion]);
@@ -261,6 +389,14 @@ if ($action === 'cancel'):
       $refCancelacion = !empty($ventaCancelar['id_cancelacion']) ? ' Cancelación #' . (int)$ventaCancelar['id_cancelacion'] . '.' : '';
       $cancelPageError = 'La venta #' . $idCancelacion . ' ya está cancelada.' . $refCancelacion;
     } else {
+      $stmt = $pdo->prepare("SELECT mp.nombre_medio, vp.monto
+                             FROM Venta_Pago vp
+                             INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
+                             WHERE vp.id_venta = ?
+                             ORDER BY mp.nombre_medio");
+      $stmt->execute([$idCancelacion]);
+      $ventaCancelar['pagos'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
       $stmt = $pdo->prepare("SELECT p.nombre_producto, dv.cantidad_detalle, dv.precio_unitario
                              FROM Detalle_venta dv
                              INNER JOIN Producto p ON p.id_producto = dv.id_producto
@@ -283,7 +419,7 @@ if ($action === 'cancel'):
   <div>
     <p class="eyebrow">Facturación / Ventas</p>
     <h1 class="title">Cancelar venta #<?= $idCancelacion ?></h1>
-    <p class="subtitle">La factura no se eliminará. Se conservará como cancelada, se registrará el reintegro y se devolverá el stock.</p>
+    <p class="subtitle">El comprobante no se eliminará. Se conservará como reintegrado, se registrará el reintegro y se devolverá el stock.</p>
   </div>
 </section>
 
@@ -304,7 +440,17 @@ if ($action === 'cancel'):
     <div><span>Venta</span><strong>#<?= $idCancelacion ?></strong></div>
     <div><span>Fecha</span><strong><?= htmlspecialchars($ventaCancelar['fecha_venta']) ?></strong></div>
     <div><span>Usuario</span><strong><?= htmlspecialchars($ventaCancelar['nombre_usuario'] ?: '-') ?></strong></div>
-    <div><span>Medio de pago</span><strong><?= htmlspecialchars($ventaCancelar['nombre_medio'] ?: '-') ?></strong></div>
+    <div><span>Medios de pago</span><strong><?php
+      $pagosCancelacion = $ventaCancelar['pagos'] ?? [];
+      if (!$pagosCancelacion) { echo '-'; }
+      else {
+        $partesPago = [];
+        foreach ($pagosCancelacion as $pago) {
+          $partesPago[] = htmlspecialchars($pago['nombre_medio']) . ' $' . number_format((float)$pago['monto'], 2, ',', '.');
+        }
+        echo implode(' + ', $partesPago);
+      }
+    ?></strong></div>
     <div class="cancel-sale-total"><span>Monto a reintegrar</span><strong>$<?= number_format((float)$ventaCancelar['total_venta'], 2, ',', '.') ?></strong></div>
   </div>
 
@@ -336,7 +482,7 @@ if ($action === 'cancel'):
     <span>Se crearán movimientos automáticos de entrada vinculados a esta venta.</span>
   </div>
 
-  <form method="post" action="index.php?mod=ventas&action=cancel&id=<?= $idCancelacion ?>" class="profile-form" data-confirm="¿Confirmar la cancelación? La factura se conservará, se registrará el reintegro y las unidades volverán al stock.">
+  <form method="post" action="index.php?mod=ventas&action=cancel&id=<?= $idCancelacion ?>" class="profile-form" data-confirm="¿Confirmar la cancelación? El comprobante se conservará, se registrará el reintegro y las unidades volverán al stock.">
     <input type="hidden" name="form" value="cancel_venta">
     <input type="hidden" name="id_venta" value="<?= $idCancelacion ?>">
     <div class="form-group">
@@ -367,7 +513,7 @@ $where = ' WHERE 1=1';
 $params = [];
 if ($fDesde !== '') { $where .= ' AND DATE(v.fecha_venta) >= ?'; $params[] = $fDesde; }
 if ($fHasta !== '') { $where .= ' AND DATE(v.fecha_venta) <= ?'; $params[] = $fHasta; }
-if ($fMedio > 0) { $where .= ' AND v.id_medio = ?'; $params[] = $fMedio; }
+if ($fMedio > 0) { $where .= ' AND EXISTS (SELECT 1 FROM Venta_Pago vpf WHERE vpf.id_venta = v.id_venta AND vpf.id_medio = ?)'; $params[] = $fMedio; }
 if ($fUsuario !== '') { $where .= ' AND u.nombre_usuario LIKE ?'; $params[] = '%' . $fUsuario . '%'; }
 if ($fEstado !== '') { $where .= ' AND v.estado_venta = ?'; $params[] = $fEstado; }
 
@@ -392,7 +538,7 @@ $offset = ($paginaActual - 1) * $porPagina;
 
 $sql = "SELECT v.id_venta, v.fecha_venta, v.total_venta, v.estado_venta,
                cv.id_cancelacion, cv.fecha_cancelacion, cv.motivo_cancelacion, cv.monto_reintegrado,
-               u.nombre_usuario, uc.nombre_usuario AS usuario_cancelacion, mp.nombre_medio,
+               u.nombre_usuario, uc.nombre_usuario AS usuario_cancelacion,
                COALESCE(SUM(dv.cantidad_detalle), 0) AS unidades,
                GROUP_CONCAT(CONCAT(p.nombre_producto, ' x', dv.cantidad_detalle)
                             ORDER BY p.nombre_producto SEPARATOR ', ') AS detalle
@@ -400,17 +546,35 @@ $sql = "SELECT v.id_venta, v.fecha_venta, v.total_venta, v.estado_venta,
         LEFT JOIN Cancelacion_Venta cv ON cv.id_venta = v.id_venta
         LEFT JOIN Usuario u ON v.id_usuario = u.id_usuario
         LEFT JOIN Usuario uc ON cv.id_usuario = uc.id_usuario
-        LEFT JOIN Medio_pago mp ON v.id_medio = mp.id_medio
         LEFT JOIN Detalle_venta dv ON v.id_venta = dv.id_venta
         LEFT JOIN Producto p ON dv.id_producto = p.id_producto" . $where .
        " GROUP BY v.id_venta, v.fecha_venta, v.total_venta, v.estado_venta,
                   cv.id_cancelacion, cv.fecha_cancelacion, cv.motivo_cancelacion, cv.monto_reintegrado,
-                  u.nombre_usuario, uc.nombre_usuario, mp.nombre_medio
+                  u.nombre_usuario, uc.nombre_usuario
          ORDER BY v.fecha_venta DESC, v.id_venta DESC
          LIMIT " . $porPagina . " OFFSET " . $offset;
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
 $ventas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+if ($ventas) {
+  $idsVentasPagina = array_map(static fn($v) => (int)$v['id_venta'], $ventas);
+  $phPagos = implode(',', array_fill(0, count($idsVentasPagina), '?'));
+  $stmtPagos = $pdo->prepare("SELECT vp.id_venta, mp.nombre_medio, vp.monto
+                             FROM Venta_Pago vp
+                             INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
+                             WHERE vp.id_venta IN ($phPagos)
+                             ORDER BY vp.id_venta, mp.nombre_medio");
+  $stmtPagos->execute($idsVentasPagina);
+  $pagosPorVenta = [];
+  foreach ($stmtPagos->fetchAll(PDO::FETCH_ASSOC) as $pago) {
+    $pagosPorVenta[(int)$pago['id_venta']][] = $pago;
+  }
+  foreach ($ventas as &$ventaFila) {
+    $ventaFila['pagos'] = $pagosPorVenta[(int)$ventaFila['id_venta']] ?? [];
+  }
+  unset($ventaFila);
+}
 
 $paginaUrl = static function (int $pagina): string {
   $query = $_GET;
@@ -419,10 +583,17 @@ $paginaUrl = static function (int $pagina): string {
   unset($query['action'], $query['id']);
   return 'index.php?' . http_build_query($query);
 };
+$exportVentasQuery = http_build_query([
+  'desde' => $fDesde,
+  'hasta' => $fHasta,
+  'medio' => $fMedio,
+  'usuario' => $fUsuario,
+  'estado' => $fEstado,
+]);
 ?>
 
 <h1 class="title">Facturación / Ventas</h1>
-<p class="subtitle">Las ventas se conservan históricamente. Una venta confirmada puede cancelarse sin borrar su factura, registrando reintegro y devolución automática de stock.</p>
+<p class="subtitle">Las ventas se conservan históricamente. Una venta confirmada puede cancelarse sin borrar su comprobante, registrando reintegro y devolución automática de stock.</p>
 
 <div class="report-kpis sales-kpis">
   <div class="report-kpi"><span>Ventas encontradas</span><strong><?= $totalVentas ?></strong></div>
@@ -439,6 +610,7 @@ $paginaUrl = static function (int $pagina): string {
       <p>Consulta ventas activas y canceladas. Las cancelaciones conservan el importe y el detalle original.</p>
     </div>
     <div class="profile-actions">
+      <a class="btn-icon" href="actions/export_ventas.php?<?= htmlspecialchars($exportVentasQuery) ?>" title="Exportar listado a Excel" aria-label="Exportar listado a Excel">📊</a>
       <a class="btn-add" href="index.php?mod=ventas&action=add">+ Registrar venta</a>
     </div>
   </div>
@@ -492,7 +664,15 @@ $paginaUrl = static function (int $pagina): string {
               <?= htmlspecialchars($v['detalle'] ?: 'Sin detalle histórico') ?>
               <div class="audit-muted"><?= (int)$v['unidades'] ?> unidad<?= (int)$v['unidades'] === 1 ? '' : 'es' ?></div>
             </td>
-            <td><?= htmlspecialchars($v['nombre_medio'] ?: '-') ?></td>
+            <td>
+              <?php if (empty($v['pagos'])): ?>
+                -
+              <?php else: ?>
+                <?php foreach ($v['pagos'] as $indicePago => $pago): ?>
+                  <?= $indicePago > 0 ? '<br>' : '' ?><?= htmlspecialchars($pago['nombre_medio']) ?>: <strong>$<?= number_format((float)$pago['monto'], 2, ',', '.') ?></strong>
+                <?php endforeach; ?>
+              <?php endif; ?>
+            </td>
             <td><strong>$<?= number_format((float)$v['total_venta'], 2, ',', '.') ?></strong></td>
             <td>
               <?php if ($esCancelada): ?>
@@ -509,7 +689,7 @@ $paginaUrl = static function (int $pagina): string {
               <a class="btn-secondary-link compact-btn"
                  href="actions/factura_venta.php?id=<?= (int)$v['id_venta'] ?>"
                  target="_blank" rel="noopener"
-                 title="Abrir factura PDF para imprimir">🖨 Imprimir factura</a>
+                 title="Abrir comprobante PDF para imprimir">🖨 Imprimir comprobante</a>
               <?php if (!$esCancelada): ?>
                 <a class="btn-danger compact-btn" href="index.php?mod=ventas&action=cancel&id=<?= (int)$v['id_venta'] ?>">Cancelar venta</a>
               <?php else: ?>

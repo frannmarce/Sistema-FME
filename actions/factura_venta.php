@@ -31,7 +31,7 @@ $stmt = $pdo->prepare(
 );
 $stmt->execute([$rolId]);
 if (!$stmt->fetchColumn()) {
-    flash('error', 'No tienes permiso para consultar facturas de ventas.');
+    flash('error', 'No tienes permiso para consultar comprobantes de ventas.');
     header('Location: ../index.php');
     exit;
 }
@@ -40,12 +40,12 @@ try {
     $stmt = $pdo->prepare(
         "SELECT v.id_venta, v.fecha_venta, v.total_venta, v.estado_venta,
                 u.nombre_usuario, u.correo_usuario,
-                mp.nombre_medio,
+                per.nombre_persona, per.apellido_persona,
                 cv.id_cancelacion, cv.fecha_cancelacion, cv.monto_reintegrado, cv.motivo_cancelacion,
                 uc.nombre_usuario AS usuario_cancelacion
          FROM Venta v
          INNER JOIN Usuario u ON u.id_usuario = v.id_usuario
-         INNER JOIN Medio_pago mp ON mp.id_medio = v.id_medio
+         LEFT JOIN Persona per ON per.id_persona = u.id_persona
          LEFT JOIN Cancelacion_Venta cv ON cv.id_venta = v.id_venta
          LEFT JOIN Usuario uc ON uc.id_usuario = cv.id_usuario
          WHERE v.id_venta = ?
@@ -58,6 +58,20 @@ try {
         flash('error', 'La venta solicitada no existe.');
         header('Location: ../index.php?mod=ventas');
         exit;
+    }
+
+    $stmt = $pdo->prepare(
+        "SELECT mp.nombre_medio, vp.monto
+         FROM Venta_Pago vp
+         INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
+         WHERE vp.id_venta = ?
+         ORDER BY mp.nombre_medio ASC"
+    );
+    $stmt->execute([$idVenta]);
+    $pagos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (!$pagos) {
+        throw new RuntimeException('La venta no tiene medios de pago registrados. Ejecuta la migración de Pago mixto.');
     }
 
     $stmt = $pdo->prepare(
@@ -75,8 +89,8 @@ try {
         throw new RuntimeException('La venta no tiene un detalle de productos disponible.');
     }
 
-    $pdf = generarFacturaVentaPdf($venta, $detalle);
-    $filename = 'factura_FME_' . str_pad((string)$idVenta, 6, '0', STR_PAD_LEFT) . '.pdf';
+    $pdf = generarFacturaVentaPdf($venta, $detalle, $pagos);
+    $filename = 'comprobante_FME_' . str_pad((string)$idVenta, 6, '0', STR_PAD_LEFT) . '.pdf';
 
     header('Content-Type: application/pdf');
     header('Content-Disposition: inline; filename="' . $filename . '"');
@@ -86,8 +100,8 @@ try {
     echo $pdf;
     exit;
 } catch (Throwable $e) {
-    error_log('FME - Factura PDF venta #' . $idVenta . ': ' . $e->getMessage());
-    flash('error', 'No se pudo generar la factura PDF de la venta seleccionada.');
+    error_log('FME - Comprobante PDF venta #' . $idVenta . ': ' . $e->getMessage());
+    flash('error', 'No se pudo generar el comprobante PDF de la venta seleccionada.');
     header('Location: ../index.php?mod=ventas');
     exit;
 }

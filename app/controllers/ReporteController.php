@@ -25,6 +25,10 @@ $reporteCancelacionesCantidad = 0;
 $reporteReintegrosTotal = 0.0;
 $reporteCancelaciones = [];
 $reporteCancelacionesError = null;
+$ventasHoyPorMedio = [];
+$ventasHoyTotal = 0.0;
+$ventasHoyCantidad = 0;
+$ventasHoyError = null;
 
 if ($modActual === 'reportes') {
     /* =========================
@@ -75,6 +79,41 @@ if ($modActual === 'reportes') {
         error_log('FME - Resumen de cancelaciones: ' . $e->getMessage());
         $reporteCancelacionesError = 'No se pudo generar el resumen de cancelaciones.';
     }
+
+    /* =========================
+       VENTAS DE HOY POR MEDIO DE PAGO
+       Muestra facturación, no ganancia. En pagos mixtos cada porción
+       se atribuye al medio que realmente recibió ese importe.
+       ========================= */
+    try {
+        $stmt = $pdo->query(
+            "SELECT mp.nombre_medio AS medio,
+                    COUNT(DISTINCT v.id_venta) AS cantidad_ventas,
+                    COALESCE(SUM(vp.monto), 0) AS total
+             FROM Venta_Pago vp
+             INNER JOIN Venta v ON v.id_venta = vp.id_venta
+             INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
+             WHERE DATE(v.fecha_venta) = CURDATE()
+               AND v.estado_venta = 'ACTIVA'
+             GROUP BY mp.id_medio, mp.nombre_medio
+             ORDER BY total DESC, mp.nombre_medio ASC"
+        );
+        $ventasHoyPorMedio = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $idsVentasHoy = [];
+        foreach ($ventasHoyPorMedio as &$filaHoy) {
+            $filaHoy['cantidad_ventas'] = (int)$filaHoy['cantidad_ventas'];
+            $filaHoy['total'] = (float)$filaHoy['total'];
+            $ventasHoyTotal += $filaHoy['total'];
+        }
+        unset($filaHoy);
+
+        $stmt = $pdo->query("SELECT COUNT(*) FROM Venta WHERE DATE(fecha_venta) = CURDATE() AND estado_venta = 'ACTIVA'");
+        $ventasHoyCantidad = (int)$stmt->fetchColumn();
+    } catch (Throwable $e) {
+        error_log('FME - Ventas de hoy por medio: ' . $e->getMessage());
+        $ventasHoyError = 'No se pudo generar el resumen de ventas de hoy.';
+    }
+
     try {
         $reporteAnios = array_map(
             'intval',
@@ -248,11 +287,12 @@ if ($modActual === 'reportes') {
         }
 
         $stmt = $pdo->prepare(
-            "SELECT COALESCE(mp.nombre_medio, 'Sin medio registrado') AS medio,
-                    COUNT(v.id_venta) AS cantidad_ventas,
-                    COALESCE(SUM(v.total_venta), 0) AS total_facturado
-             FROM Venta v
-             LEFT JOIN Medio_pago mp ON v.id_medio = mp.id_medio" . $wherePago . "
+            "SELECT mp.nombre_medio AS medio,
+                    COUNT(DISTINCT v.id_venta) AS cantidad_ventas,
+                    COALESCE(SUM(vp.monto), 0) AS total_facturado
+             FROM Venta_Pago vp
+             INNER JOIN Venta v ON v.id_venta = vp.id_venta
+             INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio" . $wherePago . "
              GROUP BY mp.id_medio, mp.nombre_medio
              ORDER BY total_facturado DESC, cantidad_ventas DESC, medio ASC"
         );
