@@ -1,6 +1,10 @@
 <?php
 $busqueda = trim($_GET['busqueda'] ?? '');
 $ciudad = trim($_GET['ciudad'] ?? '');
+$estado = $_GET['estado'] ?? '';
+if (!in_array($estado, ['', 'activo', 'inactivo'], true)) {
+  $estado = '';
+}
 
 if ($action === 'add'):
 ?>
@@ -68,7 +72,7 @@ endif;
 
 if ($action === 'edit' && isset($_GET['id'])):
   $idProveedor = (int)$_GET['id'];
-  $stmt = $pdo->prepare("SELECT pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
+  $stmt = $pdo->prepare("SELECT pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor, pr.activo_proveedor,
                                 d.nombre_pais, d.nombre_ciudad, d.num_direccion
                          FROM Proveedor pr
                          LEFT JOIN Direccion d ON pr.id_direccion = d.id_direccion
@@ -99,6 +103,10 @@ if ($action === 'edit' && isset($_GET['id'])):
         <p>Modifica únicamente la información que sea necesaria.</p>
       </div>
     </div>
+
+    <?php if ((int)($proveedor['activo_proveedor'] ?? 1) !== 1): ?>
+      <div class="module-warning">Este proveedor está inactivo. Sus productos existentes conservan la relación, pero no puede asignarse a productos nuevos.</div>
+    <?php endif; ?>
 
     <div class="profile-section">
       <h3>Datos del proveedor</h3>
@@ -160,6 +168,11 @@ if ($ciudad !== '') {
   $where .= " AND d.nombre_ciudad LIKE ?";
   $params[] = '%' . $ciudad . '%';
 }
+if ($estado === 'activo') {
+  $where .= ' AND pr.activo_proveedor = 1';
+} elseif ($estado === 'inactivo') {
+  $where .= ' AND pr.activo_proveedor = 0';
+}
 
 $countSql = "SELECT COUNT(*)
              FROM Proveedor pr
@@ -171,15 +184,15 @@ $totalPaginas = max(1, (int)ceil($totalProveedores / $porPagina));
 if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
 $offset = ($paginaActual - 1) * $porPagina;
 
-$sql = "SELECT pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
+$sql = "SELECT pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor, pr.activo_proveedor,
                d.nombre_pais, d.nombre_ciudad, d.num_direccion,
                COUNT(p.id_producto) AS productos_asignados
         FROM Proveedor pr
         LEFT JOIN Direccion d ON pr.id_direccion = d.id_direccion
         LEFT JOIN Producto p ON pr.id_proveedor = p.id_proveedor" . $where .
-       " GROUP BY pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor,
+       " GROUP BY pr.id_proveedor, pr.nombre_proveedor, pr.telefono_proveedor, pr.correo_proveedor, pr.activo_proveedor,
                   d.nombre_pais, d.nombre_ciudad, d.num_direccion
-         ORDER BY pr.nombre_proveedor ASC
+         ORDER BY pr.activo_proveedor DESC, pr.nombre_proveedor ASC
          LIMIT " . $porPagina . " OFFSET " . $offset;
 $stmt = $pdo->prepare($sql);
 $stmt->execute($params);
@@ -195,14 +208,14 @@ $paginaUrl = static function (int $pagina): string {
 ?>
 
 <h1 class="title">Proveedores</h1>
-<p class="subtitle">Alta, edición, consulta y control de proveedores vinculados a los productos.</p>
+<p class="subtitle">Alta, edición, consulta y baja lógica de proveedores vinculados a los productos.</p>
 
 <div class="profile-card wide-card">
   <div class="profile-card-header">
     <div class="profile-icon">🤝</div>
     <div>
       <h2>Gestión de proveedores</h2>
-      <p>Consulta proveedores, sus direcciones y la cantidad de productos asociados.</p>
+      <p>Los proveedores inactivos conservan su historial, pero no pueden asignarse a productos nuevos.</p>
     </div>
     <div class="profile-actions">
       <a class="btn-add" href="index.php?mod=proveedores&action=add">+ Agregar proveedor</a>
@@ -221,6 +234,14 @@ $paginaUrl = static function (int $pagina): string {
           <label class="label">Ciudad</label>
           <input class="input" type="text" name="ciudad" placeholder="Ej.: Formosa" value="<?= htmlspecialchars($ciudad) ?>">
         </div>
+        <div class="form-group">
+          <label class="label">Estado</label>
+          <select class="input" name="estado">
+            <option value="" <?= $estado === '' ? 'selected' : '' ?>>Todos</option>
+            <option value="activo" <?= $estado === 'activo' ? 'selected' : '' ?>>Activos</option>
+            <option value="inactivo" <?= $estado === 'inactivo' ? 'selected' : '' ?>>Inactivos</option>
+          </select>
+        </div>
       </div>
       <div class="module-actions left-actions">
         <button class="btn" type="submit">Buscar</button>
@@ -235,12 +256,12 @@ $paginaUrl = static function (int $pagina): string {
     <table class="result-table">
       <thead>
         <tr>
-          <th>ID</th><th>Proveedor</th><th>Teléfono</th><th>Correo</th><th>Ciudad</th><th>Dirección</th><th>Productos</th><th>Acciones</th>
+          <th>ID</th><th>Proveedor</th><th>Teléfono</th><th>Correo</th><th>Ciudad</th><th>Dirección</th><th>Productos</th><th>Estado</th><th>Acciones</th>
         </tr>
       </thead>
       <tbody>
       <?php if (!$proveedores): ?>
-        <tr><td colspan="8" class="empty-cell">No se encontraron proveedores.</td></tr>
+        <tr><td colspan="9" class="empty-cell">No se encontraron proveedores.</td></tr>
       <?php else: ?>
         <?php foreach ($proveedores as $p): ?>
         <tr>
@@ -251,16 +272,30 @@ $paginaUrl = static function (int $pagina): string {
           <td><?= htmlspecialchars($p['nombre_ciudad'] ?: '-') ?></td>
           <td><?= htmlspecialchars($p['num_direccion'] ?: '-') ?></td>
           <td><?= (int)$p['productos_asignados'] ?></td>
+          <td>
+            <?php if ((int)$p['activo_proveedor'] === 1): ?>
+              <span class="status-badge status-active">Activo</span>
+            <?php else: ?>
+              <span class="status-badge status-archived">Inactivo</span>
+            <?php endif; ?>
+          </td>
           <td class="actions-cell">
             <a class="table-action" href="index.php?mod=proveedores&action=edit&id=<?= (int)$p['id_proveedor'] ?>">Editar</a>
-            <?php if ((int)$p['productos_asignados'] === 0): ?>
-              <form method="post" action="index.php?mod=proveedores" class="inline-form" data-confirm="¿Eliminar este proveedor?">
-                <input type="hidden" name="form" value="delete_proveedor">
+            <?php if ((int)$p['activo_proveedor'] === 1): ?>
+              <?php $mensajeBaja = (int)$p['productos_asignados'] > 0
+                ? 'Este proveedor tiene ' . (int)$p['productos_asignados'] . ' producto(s) asociado(s). Los productos conservarán la relación, pero el proveedor dejará de estar disponible para nuevas asignaciones. ¿Desactivar proveedor?'
+                : '¿Desactivar este proveedor?'; ?>
+              <form method="post" action="index.php?mod=proveedores" class="inline-form" data-confirm="<?= htmlspecialchars($mensajeBaja) ?>">
+                <input type="hidden" name="form" value="archive_proveedor">
                 <input type="hidden" name="id_proveedor" value="<?= (int)$p['id_proveedor'] ?>">
-                <button class="btn-delete" type="submit">Eliminar</button>
+                <button class="btn-delete" type="submit">Desactivar</button>
               </form>
             <?php else: ?>
-              <span class="status-badge status-used" title="Tiene productos asignados">En uso</span>
+              <form method="post" action="index.php?mod=proveedores" class="inline-form" data-confirm="¿Reactivar este proveedor?">
+                <input type="hidden" name="form" value="reactivate_proveedor">
+                <input type="hidden" name="id_proveedor" value="<?= (int)$p['id_proveedor'] ?>">
+                <button class="btn-small" type="submit">Reactivar</button>
+              </form>
             <?php endif; ?>
           </td>
         </tr>

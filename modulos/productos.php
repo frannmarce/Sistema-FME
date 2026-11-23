@@ -6,8 +6,11 @@
 $stmt = $pdo->query("SELECT id_categoria, nombre_categoria FROM Categoria ORDER BY nombre_categoria ASC");
 $categorias = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$stmt = $pdo->query("SELECT id_proveedor, nombre_proveedor FROM Proveedor ORDER BY nombre_proveedor ASC");
-$proveedores = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$stmt = $pdo->query("SELECT id_proveedor, nombre_proveedor FROM Proveedor WHERE activo_proveedor = 1 ORDER BY nombre_proveedor ASC");
+$proveedoresActivos = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$stmt = $pdo->query("SELECT id_proveedor, nombre_proveedor, activo_proveedor FROM Proveedor ORDER BY activo_proveedor DESC, nombre_proveedor ASC");
+$proveedoresFiltro = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $busqueda      = trim($_GET['busqueda'] ?? '');
 $filtro_cat    = $_GET['categoria']  ?? '';
@@ -114,8 +117,8 @@ if ($action === 'add'):
     <div class="alert error"><?= htmlspecialchars($e) ?></div>
   <?php endif; ?>
 
-  <?php if (!$categorias || !$proveedores): ?>
-    <div class="module-warning">Para cargar productos debe existir al menos una categoría y un proveedor.</div>
+  <?php if (!$categorias || !$proveedoresActivos): ?>
+    <div class="module-warning">Para cargar productos debe existir al menos una categoría y un proveedor activo.</div>
   <?php endif; ?>
 
   <form method="post" action="index.php?mod=productos&action=add" class="profile-form" id="productosBatchForm">
@@ -161,7 +164,7 @@ if ($action === 'add'):
             <label class="label">Proveedor</label>
             <select class="input" name="id_proveedor[]" required>
               <option value="">Seleccione...</option>
-              <?php foreach($proveedores as $p): ?>
+              <?php foreach($proveedoresActivos as $p): ?>
                 <option value="<?= (int)$p['id_proveedor'] ?>"><?= htmlspecialchars($p['nombre_proveedor']) ?></option>
               <?php endforeach; ?>
             </select>
@@ -173,7 +176,7 @@ if ($action === 'add'):
 
     <div class="module-actions">
       <a class="btn-secondary-link" href="index.php?mod=productos">Cancelar</a>
-      <button class="btn" type="submit" <?= (!$categorias || !$proveedores) ? 'disabled' : '' ?>>Guardar productos</button>
+      <button class="btn" type="submit" <?= (!$categorias || !$proveedoresActivos) ? 'disabled' : '' ?>>Guardar productos</button>
     </div>
   </form>
 </div>
@@ -229,6 +232,13 @@ if ($action === 'edit' && isset($_GET['id'])):
 <?php
     return;
   endif;
+
+  $stmt = $pdo->prepare("SELECT id_proveedor, nombre_proveedor, activo_proveedor
+                         FROM Proveedor
+                         WHERE activo_proveedor = 1 OR id_proveedor = ?
+                         ORDER BY activo_proveedor DESC, nombre_proveedor ASC");
+  $stmt->execute([(int)$prod['id_proveedor']]);
+  $proveedoresEdicion = $stmt->fetchAll(PDO::FETCH_ASSOC);
 ?>
 
 <section class="page-heading">
@@ -242,6 +252,18 @@ if ($action === 'edit' && isset($_GET['id'])):
 <div class="profile-card">
   <?php if ((int)$prod['activo_producto'] !== 1): ?>
     <div class="module-warning">Este producto está archivado. Puedes editar sus datos históricos, pero no estará disponible para nuevas ventas o movimientos hasta reactivarlo.</div>
+  <?php endif; ?>
+  <?php
+    $proveedorActual = null;
+    foreach ($proveedoresEdicion as $proveedorOpcion) {
+      if ((int)$proveedorOpcion['id_proveedor'] === (int)$prod['id_proveedor']) {
+        $proveedorActual = $proveedorOpcion;
+        break;
+      }
+    }
+  ?>
+  <?php if ($proveedorActual && (int)$proveedorActual['activo_proveedor'] !== 1): ?>
+    <div class="module-warning">El proveedor actual está inactivo. Puedes conservarlo para mantener la relación histórica o seleccionar un proveedor activo como reemplazo.</div>
   <?php endif; ?>
 
   <?php if ($e = flash('error')): ?>
@@ -284,9 +306,9 @@ if ($action === 'edit' && isset($_GET['id'])):
       <div class="form-group">
         <label class="label">Proveedor</label>
         <select class="input" name="id_proveedor" required>
-          <?php foreach($proveedores as $p): ?>
+          <?php foreach($proveedoresEdicion as $p): ?>
             <option value="<?= (int)$p['id_proveedor'] ?>" <?= ((int)$p['id_proveedor'] === (int)$prod['id_proveedor']) ? 'selected' : '' ?>>
-              <?= htmlspecialchars($p['nombre_proveedor']) ?>
+              <?= htmlspecialchars($p['nombre_proveedor']) ?><?= (int)$p['activo_proveedor'] === 1 ? '' : ' — Inactivo' ?>
             </option>
           <?php endforeach; ?>
         </select>
@@ -357,8 +379,8 @@ endif;
           <label class="label">Proveedor</label>
           <select class="input" name="proveedor">
             <option value="">Todos</option>
-            <?php foreach($proveedores as $p): ?>
-            <option value="<?= (int)$p['id_proveedor'] ?>" <?= $filtro_prov == $p['id_proveedor'] ? 'selected' : '' ?>><?= htmlspecialchars($p['nombre_proveedor']) ?></option>
+            <?php foreach($proveedoresFiltro as $p): ?>
+            <option value="<?= (int)$p['id_proveedor'] ?>" <?= $filtro_prov == $p['id_proveedor'] ? 'selected' : '' ?>><?= htmlspecialchars($p['nombre_proveedor']) ?><?= (int)$p['activo_proveedor'] === 1 ? '' : ' — Inactivo' ?></option>
             <?php endforeach; ?>
           </select>
         </div>

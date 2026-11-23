@@ -103,8 +103,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'proveedores') {
     }
   }
 
-  if ($form === 'delete_proveedor') {
+  if ($form === 'archive_proveedor' || $form === 'reactivate_proveedor') {
     $idProveedor = (int)($_POST['id_proveedor'] ?? 0);
+    $activar = $form === 'reactivate_proveedor';
 
     if ($idProveedor <= 0) {
       flash('error', 'ID de proveedor inválido.');
@@ -113,61 +114,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'proveedores') {
     }
 
     try {
-      $pdo->beginTransaction();
+      $stmt = $pdo->prepare('SELECT nombre_proveedor, activo_proveedor FROM Proveedor WHERE id_proveedor = ? LIMIT 1');
+      $stmt->execute([$idProveedor]);
+      $proveedor = $stmt->fetch(PDO::FETCH_ASSOC);
+
+      if (!$proveedor) {
+        flash('error', 'No se encontró el proveedor.');
+        header('Location: index.php?mod=proveedores');
+        exit;
+      }
+
+      $nuevoEstado = $activar ? 1 : 0;
+      if ((int)$proveedor['activo_proveedor'] === $nuevoEstado) {
+        flash('success', $activar ? 'El proveedor ya estaba activo.' : 'El proveedor ya estaba inactivo.');
+        header('Location: index.php?mod=proveedores');
+        exit;
+      }
 
       $stmt = $pdo->prepare('SELECT COUNT(*) FROM Producto WHERE id_proveedor = ?');
       $stmt->execute([$idProveedor]);
-      if ((int)$stmt->fetchColumn() > 0) {
-        $pdo->rollBack();
-        flash('error', 'No se puede eliminar el proveedor porque tiene productos asignados.');
-        header('Location: index.php?mod=proveedores');
-        exit;
-      }
+      $productosAsignados = (int)$stmt->fetchColumn();
 
-      $stmt = $pdo->prepare('SELECT id_direccion FROM Proveedor WHERE id_proveedor = ? LIMIT 1');
-      $stmt->execute([$idProveedor]);
-      $idDireccion = (int)($stmt->fetchColumn() ?: 0);
+      $stmt = $pdo->prepare('UPDATE Proveedor SET activo_proveedor = ? WHERE id_proveedor = ?');
+      $stmt->execute([$nuevoEstado, $idProveedor]);
 
-      $stmt = $pdo->prepare('SELECT nombre_proveedor FROM Proveedor WHERE id_proveedor = ? LIMIT 1');
-      $stmt->execute([$idProveedor]);
-      $nombreProveedorEliminado = (string)($stmt->fetchColumn() ?: '');
+      registrarAuditoria(
+        $pdo,
+        'proveedores',
+        $activar ? 'REACTIVAR' : 'DESACTIVAR',
+        'Proveedor',
+        $idProveedor,
+        [
+          'nombre' => (string)$proveedor['nombre_proveedor'],
+          'activo' => $nuevoEstado,
+          'productos_asignados' => $productosAsignados,
+        ]
+      );
 
-      $stmt = $pdo->prepare('DELETE FROM Proveedor WHERE id_proveedor = ?');
-      $stmt->execute([$idProveedor]);
-
-      if ($stmt->rowCount() === 0) {
-        $pdo->rollBack();
-        flash('error', 'No se encontró el proveedor a eliminar.');
-        header('Location: index.php?mod=proveedores');
-        exit;
-      }
-
-      // Limpiamos la dirección solo si ya no está vinculada a ninguna persona/proveedor.
-      if ($idDireccion > 0) {
-        $stmt = $pdo->prepare('SELECT
-          (SELECT COUNT(*) FROM Persona WHERE id_direccion = ?) +
-          (SELECT COUNT(*) FROM Proveedor WHERE id_direccion = ?)');
-        $stmt->execute([$idDireccion, $idDireccion]);
-        if ((int)$stmt->fetchColumn() === 0) {
-          $stmt = $pdo->prepare('DELETE FROM Direccion WHERE id_direccion = ?');
-          $stmt->execute([$idDireccion]);
-        }
-      }
-
-      $pdo->commit();
-      registrarAuditoria($pdo, 'proveedores', 'ELIMINAR', 'Proveedor', $idProveedor, [
-        'nombre' => $nombreProveedorEliminado,
-      ]);
-      flash('success', 'Proveedor eliminado correctamente.');
-      header('Location: index.php?mod=proveedores');
-      exit;
-
+      flash('success', $activar
+        ? 'Proveedor reactivado correctamente. Vuelve a estar disponible para nuevas asignaciones.'
+        : ($productosAsignados > 0
+            ? 'Proveedor desactivado. Los productos existentes conservan la relación, pero ya no podrá asignarse a productos nuevos.'
+            : 'Proveedor desactivado correctamente.'));
     } catch (Throwable $e) {
-      if ($pdo->inTransaction()) $pdo->rollBack();
-      error_log('FME - Eliminar proveedor: ' . $e->getMessage());
-      flash('error', 'No se pudo eliminar el proveedor.');
-      header('Location: index.php?mod=proveedores');
-      exit;
+      error_log('FME - Estado de proveedor: ' . $e->getMessage());
+      flash('error', 'No se pudo cambiar el estado del proveedor.');
     }
+
+    header('Location: index.php?mod=proveedores');
+    exit;
   }
 }

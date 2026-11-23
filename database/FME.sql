@@ -77,10 +77,12 @@ CREATE TABLE IF NOT EXISTS Proveedor (
     telefono_proveedor VARCHAR(30) NULL,
     correo_proveedor VARCHAR(80) NULL,
     id_direccion INT NULL,
+    activo_proveedor TINYINT(1) NOT NULL DEFAULT 1,
     CONSTRAINT uq_proveedor_nombre UNIQUE (nombre_proveedor),
     CONSTRAINT fk_proveedor_direccion
       FOREIGN KEY (id_direccion) REFERENCES Direccion(id_direccion)
-      ON DELETE SET NULL
+      ON DELETE SET NULL,
+    INDEX idx_proveedor_activo (activo_proveedor)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS Producto (
@@ -471,6 +473,7 @@ INSERT INTO Proveedor (nombre_proveedor, telefono_proveedor, correo_proveedor, i
 VALUES ('AlimFormosa', '3704665721', 'alim@gmail.com', @dir_alim);
 
 -- Administrador inicial.
+
 INSERT INTO Direccion (nombre_pais, nombre_ciudad, num_direccion)
 VALUES ('Argentina', 'Formosa', 'Av. Gutnisky 590');
 SET @dir_admin = LAST_INSERT_ID();

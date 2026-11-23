@@ -100,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
         $items = [];
         if (!$errores) {
             $idsCategoriasValidas = array_map('intval', $pdo->query('SELECT id_categoria FROM Categoria')->fetchAll(PDO::FETCH_COLUMN));
-            $idsProveedoresValidos = array_map('intval', $pdo->query('SELECT id_proveedor FROM Proveedor')->fetchAll(PDO::FETCH_COLUMN));
+            $idsProveedoresValidos = array_map('intval', $pdo->query('SELECT id_proveedor FROM Proveedor WHERE activo_proveedor = 1')->fetchAll(PDO::FETCH_COLUMN));
 
             $codigosLote = [];
             for ($i = 0; $i < $cantidadFilas; $i++) {
@@ -131,7 +131,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
                 if ($precioRaw === '' || !is_numeric($precioRaw) || (float)$precioRaw < 0) $errores[] = "Fila {$fila}: el precio no es válido.";
                 if ($stockRaw === '' || !ctype_digit($stockRaw) || (int)$stockRaw < 0) $errores[] = "Fila {$fila}: el stock no es válido.";
                 if ($idCategoria <= 0 || !in_array($idCategoria, $idsCategoriasValidas, true)) $errores[] = "Fila {$fila}: la categoría seleccionada no existe.";
-                if ($idProveedor <= 0 || !in_array($idProveedor, $idsProveedoresValidos, true)) $errores[] = "Fila {$fila}: el proveedor seleccionado no existe.";
+                if ($idProveedor <= 0 || !in_array($idProveedor, $idsProveedoresValidos, true)) $errores[] = "Fila {$fila}: el proveedor seleccionado no existe o está inactivo.";
 
                 $items[] = [
                     'nombre' => $nombre,
@@ -230,15 +230,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
             $stmt->execute([$idCategoria]);
             if (!$stmt->fetchColumn()) $errores[] = 'La categoría seleccionada no existe.';
 
-            $stmt = $pdo->prepare('SELECT 1 FROM Proveedor WHERE id_proveedor = ? LIMIT 1');
-            $stmt->execute([$idProveedor]);
-            if (!$stmt->fetchColumn()) $errores[] = 'El proveedor seleccionado no existe.';
-
-            $stmt = $pdo->prepare('SELECT 1 FROM Producto WHERE id_producto = ? LIMIT 1');
+            $stmt = $pdo->prepare('SELECT id_proveedor FROM Producto WHERE id_producto = ? LIMIT 1');
             $stmt->execute([$idProducto]);
-            if (!$stmt->fetchColumn()) {
+            $idProveedorActual = $stmt->fetchColumn();
+            if ($idProveedorActual === false) {
                 $errores[] = 'El producto a editar no existe.';
-            } elseif ($codigo !== '') {
+            } else {
+                $idProveedorActual = (int)$idProveedorActual;
+                $stmt = $pdo->prepare('SELECT activo_proveedor FROM Proveedor WHERE id_proveedor = ? LIMIT 1');
+                $stmt->execute([$idProveedor]);
+                $estadoProveedor = $stmt->fetchColumn();
+                if ($estadoProveedor === false) {
+                    $errores[] = 'El proveedor seleccionado no existe.';
+                } elseif ((int)$estadoProveedor !== 1 && $idProveedor !== $idProveedorActual) {
+                    $errores[] = 'El proveedor seleccionado está inactivo y no puede asignarse a este producto.';
+                }
+            }
+
+            if (!$errores && $codigo !== '') {
                 $stmt = $pdo->prepare('SELECT 1 FROM Producto WHERE codigo_barras = ? AND id_producto <> ? LIMIT 1');
                 $stmt->execute([$codigo, $idProducto]);
                 if ($stmt->fetchColumn()) $errores[] = 'El código de barras ya está asignado a otro producto.';
