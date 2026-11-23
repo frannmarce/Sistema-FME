@@ -82,6 +82,7 @@ function obtenerTotalesMovimientosCaja(PDO $pdo, int $idCaja): array
 function obtenerEstadoOperativoCaja(PDO $pdo): array
 {
     try {
+        // Primero se bloquea cualquier operación nueva si quedó un turno abierto de un día anterior.
         $stmt = $pdo->query(
             "SELECT c.*,
                     ua.nombre_usuario AS usuario_apertura,
@@ -91,7 +92,7 @@ function obtenerEstadoOperativoCaja(PDO $pdo): array
              LEFT JOIN Usuario uc ON uc.id_usuario = c.id_usuario_cierre
              WHERE c.estado_caja = 'ABIERTA'
                AND c.fecha_caja < CURDATE()
-             ORDER BY c.fecha_caja ASC
+             ORDER BY c.fecha_caja ASC, c.numero_turno ASC
              LIMIT 1"
         );
         $anterior = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -101,10 +102,13 @@ function obtenerEstadoOperativoCaja(PDO $pdo): array
                 'codigo' => 'PENDIENTE_CIERRE_ANTERIOR',
                 'habilita_ventas' => false,
                 'caja' => $anterior,
-                'mensaje' => 'Existe una caja de un día anterior que todavía está abierta.',
+                'ultima_caja' => $anterior,
+                'turno_siguiente' => null,
+                'mensaje' => 'Existe un turno de caja de un día anterior que todavía está abierto.',
             ];
         }
 
+        // Si hoy ya existe un turno abierto, ese es el único turno operativo.
         $stmt = $pdo->query(
             "SELECT c.*,
                     ua.nombre_usuario AS usuario_apertura,
@@ -113,33 +117,57 @@ function obtenerEstadoOperativoCaja(PDO $pdo): array
              INNER JOIN Usuario ua ON ua.id_usuario = c.id_usuario_apertura
              LEFT JOIN Usuario uc ON uc.id_usuario = c.id_usuario_cierre
              WHERE c.fecha_caja = CURDATE()
+               AND c.estado_caja = 'ABIERTA'
+             ORDER BY c.numero_turno DESC, c.id_caja DESC
              LIMIT 1"
         );
-        $hoy = $stmt->fetch(PDO::FETCH_ASSOC);
+        $abierta = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$hoy) {
+        if ($abierta) {
+            return [
+                'codigo' => 'ABIERTA_HOY',
+                'habilita_ventas' => true,
+                'caja' => $abierta,
+                'ultima_caja' => $abierta,
+                'turno_siguiente' => null,
+                'mensaje' => 'El turno ' . (int)$abierta['numero_turno'] . ' de caja está abierto.',
+            ];
+        }
+
+        // No hay turno abierto: buscamos el último turno de hoy para decidir si corresponde
+        // abrir el primero o iniciar un turno nuevo.
+        $stmt = $pdo->query(
+            "SELECT c.*,
+                    ua.nombre_usuario AS usuario_apertura,
+                    uc.nombre_usuario AS usuario_cierre
+             FROM Caja c
+             INNER JOIN Usuario ua ON ua.id_usuario = c.id_usuario_apertura
+             LEFT JOIN Usuario uc ON uc.id_usuario = c.id_usuario_cierre
+             WHERE c.fecha_caja = CURDATE()
+             ORDER BY c.numero_turno DESC, c.id_caja DESC
+             LIMIT 1"
+        );
+        $ultima = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if (!$ultima) {
             return [
                 'codigo' => 'PENDIENTE_APERTURA',
                 'habilita_ventas' => false,
                 'caja' => null,
-                'mensaje' => 'La caja de hoy todavía no fue abierta.',
+                'ultima_caja' => null,
+                'turno_siguiente' => 1,
+                'mensaje' => 'Todavía no se abrió el primer turno de caja de hoy.',
             ];
         }
 
-        if (strtoupper((string)$hoy['estado_caja']) === 'ABIERTA') {
-            return [
-                'codigo' => 'ABIERTA_HOY',
-                'habilita_ventas' => true,
-                'caja' => $hoy,
-                'mensaje' => 'La caja de hoy está abierta.',
-            ];
-        }
-
+        $turnoSiguiente = max(1, (int)($ultima['numero_turno'] ?? 1) + 1);
         return [
-            'codigo' => 'CERRADA_HOY',
+            'codigo' => 'PENDIENTE_NUEVO_TURNO',
             'habilita_ventas' => false,
-            'caja' => $hoy,
-            'mensaje' => 'La caja de hoy ya fue cerrada.',
+            'caja' => null,
+            'ultima_caja' => $ultima,
+            'turno_siguiente' => $turnoSiguiente,
+            'mensaje' => 'El turno ' . (int)$ultima['numero_turno'] . ' ya fue cerrado. Puedes abrir el turno ' . $turnoSiguiente . '.',
         ];
     } catch (Throwable $e) {
         error_log('FME - Estado de caja: ' . $e->getMessage());
@@ -147,6 +175,8 @@ function obtenerEstadoOperativoCaja(PDO $pdo): array
             'codigo' => 'NO_CONFIGURADA',
             'habilita_ventas' => false,
             'caja' => null,
+            'ultima_caja' => null,
+            'turno_siguiente' => null,
             'mensaje' => 'El módulo Caja todavía no está configurado en la base de datos.',
         ];
     }
@@ -177,19 +207,38 @@ function calcularResumenCaja(PDO $pdo, int $idCaja, string $fechaCaja): array
     $stmt->execute([$idCaja]);
     $ventas = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-    // En pagos mixtos solo la parte efectivamente cobrada en Efectivo ingresa a la caja física.
+    // Desglose de lo cobrado por medio de pago durante la jornada.
+    // En pagos mixtos cada parte aparece bajo su medio real en Venta_Pago.
     $stmt = $pdo->prepare(
-        "SELECT COALESCE(SUM(vp.monto), 0)
+        "SELECT mp.nombre_medio, COALESCE(SUM(vp.monto), 0) AS total_medio
          FROM Venta_Pago vp
          INNER JOIN Venta v ON v.id_venta = vp.id_venta
          INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
          WHERE v.id_caja = ?
-           AND LOWER(mp.nombre_medio) = 'efectivo'"
+         GROUP BY mp.id_medio, mp.nombre_medio
+         ORDER BY mp.nombre_medio ASC"
     );
     $stmt->execute([$idCaja]);
-    $ventasEfectivo = round((float)$stmt->fetchColumn(), 2);
+    $pagosPorMedio = [];
+    foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $filaPago) {
+        $nombreMedio = trim((string)($filaPago['nombre_medio'] ?? ''));
+        if ($nombreMedio === '') {
+            continue;
+        }
+        $pagosPorMedio[$nombreMedio] = round((float)($filaPago['total_medio'] ?? 0), 2);
+    }
 
-    // Una cancelación es total: el reintegro en efectivo equivale a la parte original pagada en efectivo.
+    // Solo la parte efectivamente cobrada en Efectivo ingresa a la caja física.
+    $ventasEfectivo = 0.0;
+    foreach ($pagosPorMedio as $nombreMedio => $totalMedio) {
+        if (mb_strtolower($nombreMedio, 'UTF-8') === 'efectivo') {
+            $ventasEfectivo = round((float)$totalMedio, 2);
+            break;
+        }
+    }
+
+    // Una cancelación es total: el reintegro en efectivo equivale a la parte original
+    // pagada en efectivo, pero se descuenta del turno donde efectivamente se hizo el reintegro.
     $stmt = $pdo->prepare(
         "SELECT COUNT(DISTINCT cv.id_cancelacion) AS cantidad_reintegros,
                 COALESCE(SUM(vp.monto), 0) AS reintegros_efectivo
@@ -197,10 +246,10 @@ function calcularResumenCaja(PDO $pdo, int $idCaja, string $fechaCaja): array
          INNER JOIN Venta v ON v.id_venta = cv.id_venta
          INNER JOIN Venta_Pago vp ON vp.id_venta = v.id_venta
          INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
-         WHERE DATE(cv.fecha_cancelacion) = ?
+         WHERE cv.id_caja_reintegro = ?
            AND LOWER(mp.nombre_medio) = 'efectivo'"
     );
-    $stmt->execute([$fechaCaja]);
+    $stmt->execute([$idCaja]);
     $reintegros = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
     $movimientos = obtenerTotalesMovimientosCaja($pdo, $idCaja);
@@ -213,6 +262,7 @@ function calcularResumenCaja(PDO $pdo, int $idCaja, string $fechaCaja): array
         'monto_apertura' => $montoApertura,
         'cantidad_ventas' => (int)($ventas['cantidad_ventas'] ?? 0),
         'total_ventas' => round((float)($ventas['total_ventas'] ?? 0), 2),
+        'pagos_por_medio' => $pagosPorMedio,
         'ventas_efectivo' => $ventasEfectivo,
         'cantidad_reintegros' => (int)($reintegros['cantidad_reintegros'] ?? 0),
         'reintegros_efectivo' => $reintegrosEfectivo,
@@ -254,45 +304,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
         try {
             $pdo->beginTransaction();
 
+            // Solo puede existir un turno abierto a la vez, sin importar la fecha.
             $stmt = $pdo->query(
-                "SELECT id_caja, fecha_caja
+                "SELECT id_caja, fecha_caja, numero_turno
                  FROM Caja
                  WHERE estado_caja = 'ABIERTA'
-                   AND fecha_caja < CURDATE()
-                 ORDER BY fecha_caja ASC
+                 ORDER BY fecha_caja ASC, numero_turno ASC
                  LIMIT 1
                  FOR UPDATE"
             );
             $pendiente = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($pendiente) {
+                $fechaPendiente = date('d/m/Y', strtotime((string)$pendiente['fecha_caja']));
                 throw new RuntimeException(
-                    'Antes de abrir la caja de hoy debes cerrar la caja pendiente del ' .
-                    date('d/m/Y', strtotime((string)$pendiente['fecha_caja'])) . '.'
+                    'Antes de abrir un nuevo turno debes cerrar el turno ' .
+                    (int)$pendiente['numero_turno'] . ' del ' . $fechaPendiente . '.'
                 );
             }
 
+            // El número de turno se genera secuencialmente por día.
             $stmt = $pdo->query(
-                "SELECT id_caja, estado_caja
+                "SELECT id_caja, numero_turno
                  FROM Caja
                  WHERE fecha_caja = CURDATE()
+                 ORDER BY numero_turno DESC, id_caja DESC
                  LIMIT 1
                  FOR UPDATE"
             );
-            $existente = $stmt->fetch(PDO::FETCH_ASSOC);
-
-            if ($existente) {
-                if (strtoupper((string)$existente['estado_caja']) === 'ABIERTA') {
-                    throw new RuntimeException('La caja de hoy ya se encuentra abierta.');
-                }
-                throw new RuntimeException('La caja de hoy ya fue cerrada y no puede volver a abrirse.');
-            }
+            $ultimoTurno = $stmt->fetch(PDO::FETCH_ASSOC);
+            $numeroTurno = $ultimoTurno ? ((int)$ultimoTurno['numero_turno'] + 1) : 1;
 
             $stmt = $pdo->prepare(
                 "INSERT INTO Caja
-                 (fecha_caja, estado_caja, fecha_apertura, id_usuario_apertura, monto_apertura, observacion_apertura)
-                 VALUES (CURDATE(), 'ABIERTA', NOW(), ?, ?, ?)"
+                 (fecha_caja, numero_turno, estado_caja, fecha_apertura, id_usuario_apertura, monto_apertura, observacion_apertura)
+                 VALUES (CURDATE(), ?, 'ABIERTA', NOW(), ?, ?, ?)"
             );
             $stmt->execute([
+                $numeroTurno,
                 $userId,
                 $montoApertura,
                 $observacionApertura !== '' ? $observacionApertura : null,
@@ -307,11 +355,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
 
             registrarAuditoria($pdo, 'caja', 'ABRIR', 'Caja', $idCaja, [
                 'fecha_caja' => date('Y-m-d'),
+                'numero_turno' => $numeroTurno,
                 'estado' => 'ABIERTA',
                 'monto_apertura' => $montoApertura,
             ]);
 
-            flash('success', 'Caja abierta correctamente con un fondo inicial de $' . number_format($montoApertura, 2, ',', '.') . '. Facturación / Ventas quedó habilitado.');
+            flash('success', 'Turno ' . $numeroTurno . ' de caja abierto correctamente con un fondo inicial de $' . number_format($montoApertura, 2, ',', '.') . '. Facturación / Ventas quedó habilitado.');
             header('Location: index.php?mod=caja');
             exit;
         } catch (RuntimeException $e) {
@@ -354,7 +403,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
             $pdo->beginTransaction();
 
             $stmt = $pdo->prepare(
-                "SELECT id_caja, fecha_caja, estado_caja
+                "SELECT id_caja, fecha_caja, numero_turno, estado_caja
                  FROM Caja
                  WHERE id_caja = ?
                  LIMIT 1
@@ -470,7 +519,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
             $pdo->beginTransaction();
 
             $stmt = $pdo->prepare(
-                "SELECT id_caja, fecha_caja, estado_caja
+                "SELECT id_caja, fecha_caja, numero_turno, estado_caja
                  FROM Caja
                  WHERE id_caja = ?
                  LIMIT 1
@@ -531,6 +580,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
 
             registrarAuditoria($pdo, 'caja', 'CERRAR', 'Caja', $idCaja, [
                 'fecha_caja' => (string)$caja['fecha_caja'],
+                'numero_turno' => (int)($caja['numero_turno'] ?? 1),
                 'monto_apertura' => (float)$resumen['monto_apertura'],
                 'saldo_teorico' => $saldoTeorico,
                 'efectivo_contado' => $efectivoContado,
@@ -543,7 +593,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'caja') {
 
             flash(
                 'success',
-                'Caja cerrada correctamente. Efectivo contado: $' . number_format($efectivoContado, 2, ',', '.') .
+                'Turno ' . (int)($caja['numero_turno'] ?? 1) . ' cerrado correctamente. Efectivo contado: $' . number_format($efectivoContado, 2, ',', '.') .
                 ' · Diferencia: $' . number_format($diferencia, 2, ',', '.') . '.'
             );
             header('Location: index.php?mod=caja');

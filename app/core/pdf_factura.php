@@ -1,7 +1,7 @@
 <?php
 
 /**
- * Generador PDF liviano para comprobantes de venta de Sistema FME.
+ * Generador PDF liviano para facturas/comprobantes de venta de Sistema FME.
  * No requiere librerías externas: usa fuentes estándar PDF (Helvetica).
  */
 final class FmeFacturaPdf
@@ -67,7 +67,6 @@ final class FmeFacturaPdf
         $words = preg_split('/\s+/u', $text) ?: [$text];
         $lines = [];
         $line = '';
-
         foreach ($words as $word) {
             $candidate = $line === '' ? $word : $line . ' ' . $word;
             if ($this->width($candidate, $size, $bold) <= $maxWidth || $line === '') {
@@ -135,11 +134,9 @@ final class FmeFacturaPdf
         if (!$this->pages) {
             $this->addPage();
         }
-
         $pageCount = count($this->pages);
         $objects = [];
         $objects[1] = '<< /Type /Catalog /Pages 2 0 R >>';
-
         $kids = [];
         for ($i = 0; $i < $pageCount; $i++) {
             $kids[] = (5 + $i * 2) . ' 0 R';
@@ -147,7 +144,6 @@ final class FmeFacturaPdf
         $objects[2] = '<< /Type /Pages /Kids [' . implode(' ', $kids) . '] /Count ' . $pageCount . ' >>';
         $objects[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
         $objects[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
-
         foreach ($this->pages as $i => $stream) {
             $pageObj = 5 + $i * 2;
             $contentObj = $pageObj + 1;
@@ -227,41 +223,60 @@ function generarFacturaVentaPdf(array $venta, array $detalle, array $pagos = [])
     }
 
     $pagosNormalizados = [];
+    $totalEntregado = 0.0;
+    $totalAplicado = 0.0;
+    $efectivoEntregado = 0.0;
     foreach ($pagos as $pago) {
         $medio = trim((string)($pago['nombre_medio'] ?? ''));
         $monto = round((float)($pago['monto'] ?? 0), 2);
-        if ($medio !== '' && $monto > 0) {
-            $pagosNormalizados[] = ['nombre_medio' => $medio, 'monto' => $monto];
+        $montoEntregado = round((float)($pago['monto_entregado'] ?? $monto), 2);
+        if ($medio !== '' && ($monto > 0 || $montoEntregado > 0)) {
+            $pagosNormalizados[] = [
+                'nombre_medio' => $medio,
+                'monto' => $monto,
+                'monto_entregado' => $montoEntregado,
+            ];
+            $totalAplicado = round($totalAplicado + $monto, 2);
+            $totalEntregado = round($totalEntregado + $montoEntregado, 2);
+            if (strtolower($medio) === 'efectivo') {
+                $efectivoEntregado = round($efectivoEntregado + $montoEntregado, 2);
+            }
         }
     }
+    $vuelto = round(max(0, $totalEntregado - $totalAplicado), 2);
     $medioResumen = count($pagosNormalizados) > 1
         ? 'Pago mixto (' . count($pagosNormalizados) . ' medios)'
         : (string)($pagosNormalizados[0]['nombre_medio'] ?? 'No disponible');
 
-    $numeroComprobante = str_pad((string)$idVenta, 8, '0', STR_PAD_LEFT);
+    $numeroComprobante = str_pad((string)$idVenta, 7, '0', STR_PAD_LEFT);
+    $serieFactura = '0005-' . $numeroComprobante;
 
     $drawHeader = static function (FmeFacturaPdf $pdf, bool $continuacion = false) use (
         $margin, $right, $dark, $muted, $line, $light, $accent, $refund, $refundLight,
-        $numeroComprobante, $fechaDia, $fechaHora, $vendedor, $venta, $esReintegrada, $medioResumen
+        $serieFactura, $fechaDia, $fechaHora, $vendedor, $venta, $esReintegrada, $medioResumen
     ): float {
         // Identidad institucional simple, inspirada en comprobantes comerciales reales.
         $pdf->text($margin, 54, 'FME', 23, true, $dark);
         $pdf->text($margin, 74, 'Sistema de Gestión y Ventas', 9, true, $accent);
         $pdf->text($margin, 89, 'Productos electrónicos', 8.5, false, $muted);
+        $pdf->text($margin, 105, 'Domicilio: España 317', 8.4, false, $muted);
+        $pdf->text($margin, 119, 'Localidad: FORMOSA', 8.4, false, $muted);
+        $pdf->text($margin, 133, 'IVA: Responsable Inscripto', 8.4, false, $muted);
+        $pdf->text($margin, 147, 'Cliente: CONSUMIDOR FINAL', 8.4, false, $muted);
 
-        $titulo = $continuacion ? 'COMPROBANTE DE PAGO - CONT.' : 'COMPROBANTE DE PAGO';
+        $titulo = $continuacion ? 'FACTURA B - CONT.' : 'FACTURA B';
         $pdf->textRight($right, 54, $titulo, $continuacion ? 15 : 17, true, $dark);
-        $pdf->textRight($right, 77, 'Nro. ' . $numeroComprobante, 10, true, $dark);
+        $pdf->textRight($right, 77, 'Nro. ' . $serieFactura, 10, true, $dark);
         $pdf->textRight($right, 94, 'Fecha: ' . $fechaDia . ($fechaHora !== '' ? '  ' . $fechaHora : ''), 8.8, false, $muted);
 
-        $pdf->line($margin, 112, $right, 112, 1.2, $dark);
+        $pdf->line($margin, 166, $right, 166, 1.2, $dark);
 
         if ($esReintegrada) {
-            $pdf->fillRect($margin, 124, $right - $margin, 29, $refundLight);
-            $pdf->text($margin + 12, 143, 'COMPROBANTE REINTEGRADO', 10.5, true, $refund);
-            $top = 171.0;
+            $pdf->fillRect($margin, 178, $right - $margin, 29, $refundLight);
+            $pdf->text($margin + 12, 197, 'FACTURA REINTEGRADA', 10.5, true, $refund);
+            $top = 224.0;
         } else {
-            $top = 132.0;
+            $top = 186.0;
         }
 
         // Datos de la operación. No se muestra un estado genérico para ventas normales.
@@ -351,7 +366,8 @@ function generarFacturaVentaPdf(array $venta, array $detalle, array $pagos = [])
 
     if ($pagosNormalizados) {
         $y += 27;
-        $altoPagos = 34.0 + (count($pagosNormalizados) * 20.0);
+        $lineasExtra = $vuelto > 0.009 ? 2 : 0;
+        $altoPagos = 34.0 + ((count($pagosNormalizados) + $lineasExtra) * 20.0);
         if ($y + $altoPagos > 700) {
             $pdf->addPage();
             $y = $drawHeader($pdf, true);
@@ -360,9 +376,21 @@ function generarFacturaVentaPdf(array $venta, array $detalle, array $pagos = [])
         $pdf->text($margin + 12, $y + 20, 'DETALLE DE PAGO', 9.5, true, $dark);
         $pagoY = $y + 42;
         foreach ($pagosNormalizados as $pago) {
-            $pdf->text($margin + 12, $pagoY, (string)$pago['nombre_medio'], 9, false, $dark);
-            $pdf->textRight($right - 12, $pagoY, $money((float)$pago['monto']), 9, true, $dark);
+            $nombrePago = (string)$pago['nombre_medio'];
+            $montoMostrar = (float)$pago['monto'];
+            if (strtolower($nombrePago) === 'efectivo' && $vuelto > 0.009) {
+                $nombrePago = 'Efectivo aplicado';
+            }
+            $pdf->text($margin + 12, $pagoY, $nombrePago, 9, false, $dark);
+            $pdf->textRight($right - 12, $pagoY, $money($montoMostrar), 9, true, $dark);
             $pagoY += 20;
+        }
+        if ($vuelto > 0.009) {
+            $pdf->text($margin + 12, $pagoY, 'Efectivo entregado', 9, false, $dark);
+            $pdf->textRight($right - 12, $pagoY, $money($efectivoEntregado), 9, true, $dark);
+            $pagoY += 20;
+            $pdf->text($margin + 12, $pagoY, 'VUELTO', 9.5, true, $accent);
+            $pdf->textRight($right - 12, $pagoY, $money($vuelto), 10, true, $accent);
         }
         $y += $altoPagos;
     }
@@ -406,7 +434,7 @@ function generarFacturaVentaPdf(array $venta, array $detalle, array $pagos = [])
     $pdf->line($margin, $footerY, $right, $footerY, 0.8, $line);
     $pdf->text($margin, $footerY + 24, 'Gracias por su compra.', 12.5, true, $dark);
     $pdf->text($margin, $footerY + 43, 'FME - Sistema de Gestión y Ventas de Productos Electrónicos', 8.2, true, $dark);
-    $pdf->text($margin, $footerY + 58, 'Comprobante interno de pago. No constituye comprobante fiscal.', 8, false, $muted);
+    $pdf->text($margin, $footerY + 58, 'Factura B de uso interno. No constituye comprobante fiscal.', 8, false, $muted);
 
     return $pdf->output();
 }

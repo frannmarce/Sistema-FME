@@ -31,7 +31,7 @@ if ($action === 'detail'):
 <section class="page-heading">
   <div>
     <p class="eyebrow">Caja</p>
-    <h1 class="title">Detalle de caja #<?= (int)$cajaDetalle['id_caja'] ?></h1>
+    <h1 class="title">Detalle de caja #<?= (int)$cajaDetalle['id_caja'] ?> · Turno <?= (int)($cajaDetalle['numero_turno'] ?? 1) ?></h1>
     <p class="subtitle">Actividad correspondiente al <?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaDetalle['fecha_caja']))) ?>.</p>
   </div>
 </section>
@@ -67,6 +67,7 @@ if ($action === 'detail'):
   <div class="profile-section" style="margin-top:14px">
     <h3>Responsables y horarios</h3>
     <div class="profile-grid">
+      <div class="form-group"><label class="label">Turno</label><div>Turno <?= (int)($cajaDetalle['numero_turno'] ?? 1) ?></div></div>
       <div class="form-group"><label class="label">Apertura</label><div><?= htmlspecialchars(date('d/m/Y H:i', strtotime((string)$cajaDetalle['fecha_apertura']))) ?> · <?= htmlspecialchars((string)$cajaDetalle['usuario_apertura']) ?></div></div>
       <div class="form-group"><label class="label">Fondo inicial</label><div><?= $moneyCaja((float)$cajaDetalle['monto_apertura']) ?></div></div>
       <div class="form-group"><label class="label">Cierre</label><div><?= $cajaDetalle['fecha_cierre'] ? htmlspecialchars(date('d/m/Y H:i', strtotime((string)$cajaDetalle['fecha_cierre']))) : '-' ?> · <?= htmlspecialchars((string)($cajaDetalle['usuario_cierre'] ?: '-')) ?></div></div>
@@ -80,7 +81,7 @@ if ($action === 'detail'):
 <div class="profile-card wide-card">
   <div class="profile-card-header">
     <div class="profile-icon">↔️</div>
-    <div><h2>Movimientos manuales de efectivo</h2><p>Salidas registradas durante la jornada y retiros efectuados después del cierre.</p></div>
+    <div><h2>Movimientos manuales de efectivo</h2><p>Salidas registradas durante el turno y retiros efectuados después del cierre.</p></div>
   </div>
   <div class="table-responsive">
     <table class="result-table">
@@ -154,6 +155,9 @@ if ($action === 'detail'):
 endif;
 
 $cajaGestion = $estadoCaja['caja'] ?? null;
+$ultimaCajaHoy = $estadoCaja['ultima_caja'] ?? null;
+$turnoSiguiente = (int)($estadoCaja['turno_siguiente'] ?? 1);
+$puedeAbrirTurno = in_array($estadoCaja['codigo'], ['PENDIENTE_APERTURA', 'PENDIENTE_NUEVO_TURNO'], true);
 $resumenActual = null;
 $movimientosActuales = [];
 $totalesMovimientosActuales = ['salidas_jornada' => 0.0, 'retiros_post_cierre' => 0.0];
@@ -173,14 +177,14 @@ if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
 $offset = ($paginaActual - 1) * $porPagina;
 
 $stmt = $pdo->query(
-    "SELECT c.id_caja, c.fecha_caja, c.estado_caja, c.fecha_apertura, c.fecha_cierre,
+    "SELECT c.id_caja, c.fecha_caja, c.numero_turno, c.estado_caja, c.fecha_apertura, c.fecha_cierre,
             c.monto_apertura, c.efectivo_esperado, c.efectivo_contado, c.diferencia,
             ua.nombre_usuario AS usuario_apertura,
             uc.nombre_usuario AS usuario_cierre
      FROM Caja c
      INNER JOIN Usuario ua ON ua.id_usuario = c.id_usuario_apertura
      LEFT JOIN Usuario uc ON uc.id_usuario = c.id_usuario_cierre
-     ORDER BY c.fecha_caja DESC, c.id_caja DESC
+     ORDER BY c.fecha_caja DESC, c.numero_turno DESC, c.id_caja DESC
      LIMIT {$porPagina} OFFSET {$offset}"
 );
 $historialCajas = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -193,32 +197,32 @@ $paginaCajaUrl = static function (int $pagina): string {
   <div>
     <p class="eyebrow">Operaciones</p>
     <h1 class="title">Caja</h1>
-    <p class="subtitle">Apertura diaria, movimientos de efectivo, arqueo y cierre de actividad.</p>
+    <p class="subtitle">Apertura por turnos, movimientos de efectivo, arqueo y cierre de actividad.</p>
   </div>
 </section>
 
 <?php if ($estadoCaja['codigo'] === 'PENDIENTE_CIERRE_ANTERIOR' && $cajaGestion): ?>
   <div class="module-warning">
-    <strong>Cierre pendiente:</strong> la caja del <?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaGestion['fecha_caja']))) ?> continúa abierta. Debes cerrarla antes de abrir la caja de hoy o utilizar Facturación / Ventas.
+    <strong>Cierre pendiente:</strong> el turno <?= (int)($cajaGestion['numero_turno'] ?? 1) ?> del <?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaGestion['fecha_caja']))) ?> continúa abierto. Debes cerrarlo antes de iniciar otro turno o utilizar Facturación / Ventas.
   </div>
 <?php elseif ($estadoCaja['codigo'] === 'PENDIENTE_APERTURA'): ?>
-  <div class="alert error">La caja de hoy todavía no fue abierta. Facturación / Ventas permanecerá bloqueado hasta realizar la apertura.</div>
-<?php elseif ($estadoCaja['codigo'] === 'CERRADA_HOY'): ?>
-  <div class="alert success">La caja de hoy ya fue cerrada. El cierre quedó registrado y Facturación / Ventas permanecerá bloqueado hasta la próxima apertura diaria.</div>
+  <div class="alert error">Todavía no se abrió el primer turno de caja de hoy. Facturación / Ventas permanecerá bloqueado hasta realizar la apertura.</div>
+<?php elseif ($estadoCaja['codigo'] === 'PENDIENTE_NUEVO_TURNO'): ?>
+  <div class="alert success">El turno <?= (int)($ultimaCajaHoy['numero_turno'] ?? 1) ?> ya fue cerrado. Puedes abrir el turno <?= $turnoSiguiente ?> para continuar operando hoy.</div>
 <?php elseif ($estadoCaja['codigo'] === 'NO_CONFIGURADA'): ?>
   <div class="module-warning">El módulo Caja todavía no está configurado. Ejecuta las migraciones SQL incluidas para Caja.</div>
 <?php endif; ?>
 
-<?php if ($estadoCaja['codigo'] === 'PENDIENTE_APERTURA'): ?>
+<?php if ($puedeAbrirTurno): ?>
 <div class="profile-card wide-card">
   <div class="profile-card-header">
     <div class="profile-icon">🔓</div>
     <div>
-      <h2>Abrir caja del <?= htmlspecialchars(date('d/m/Y')) ?></h2>
-      <p>Cuenta el efectivo físico disponible al comenzar la jornada e indica el fondo inicial.</p>
+      <h2><?= $turnoSiguiente === 1 ? 'Abrir primer turno' : 'Abrir nuevo turno' ?> · Turno <?= $turnoSiguiente ?> · <?= htmlspecialchars(date('d/m/Y')) ?></h2>
+      <p>Cuenta el efectivo físico disponible al comenzar este turno e indica el fondo inicial.</p>
     </div>
   </div>
-  <form method="post" action="index.php?mod=caja" class="profile-form" data-confirm="¿Abrir la caja de hoy y habilitar Facturación / Ventas?">
+  <form method="post" action="index.php?mod=caja" class="profile-form" data-confirm="¿Abrir el turno <?= $turnoSiguiente ?> y habilitar Facturación / Ventas?">
     <input type="hidden" name="form" value="abrir_caja">
     <div class="profile-grid">
       <div class="form-group">
@@ -230,7 +234,7 @@ $paginaCajaUrl = static function (int $pagina): string {
         <input class="input" id="observacion_apertura" name="observacion_apertura" maxlength="255" placeholder="Ej.: fondo para cambio">
       </div>
     </div>
-    <div class="module-actions left-actions"><button class="btn" type="submit">Abrir caja</button></div>
+    <div class="module-actions left-actions"><button class="btn" type="submit"><?= $turnoSiguiente === 1 ? 'Abrir caja' : 'Abrir nuevo turno' ?></button></div>
   </form>
 </div>
 <?php endif; ?>
@@ -238,7 +242,7 @@ $paginaCajaUrl = static function (int $pagina): string {
 <?php if ($cajaGestion && strtoupper((string)$cajaGestion['estado_caja']) === 'ABIERTA' && $resumenActual): ?>
 <div class="report-kpis report-summary-kpis">
   <article class="report-kpi"><span>Fondo inicial</span><strong><?= $moneyCaja((float)$resumenActual['monto_apertura']) ?></strong><small>declarado en la apertura</small></article>
-  <article class="report-kpi"><span>Ventas en efectivo</span><strong><?= $moneyCaja((float)$resumenActual['ventas_efectivo']) ?></strong><small>ingresos de la jornada</small></article>
+  <article class="report-kpi"><span>Ventas en efectivo</span><strong><?= $moneyCaja((float)$resumenActual['ventas_efectivo']) ?></strong><small>ingresos del turno</small></article>
   <article class="report-kpi kpi-danger"><span>Reintegros + salidas</span><strong><?= $moneyCaja((float)$resumenActual['reintegros_efectivo'] + (float)$resumenActual['salidas_jornada']) ?></strong><small>efectivo que salió de la caja</small></article>
   <article class="report-kpi"><span>Saldo teórico</span><strong><?= $moneyCaja((float)$resumenActual['saldo_teorico']) ?></strong><small>efectivo que debería existir ahora</small></article>
 </div>
@@ -249,7 +253,7 @@ $paginaCajaUrl = static function (int $pagina): string {
     <div class="profile-icon">↘️</div>
     <div>
       <h2>Salida de efectivo</h2>
-      <p>Registra pagos o extracciones realizados durante la jornada. La salida reduce el saldo teórico de la caja.</p>
+      <p>Registra pagos o extracciones realizados durante el turno. La salida reduce el saldo teórico de la caja.</p>
     </div>
   </div>
   <form method="post" action="index.php?mod=caja" class="profile-form" data-confirm="¿Registrar esta salida de efectivo?">
@@ -273,7 +277,7 @@ $paginaCajaUrl = static function (int $pagina): string {
       </div>
       <div class="form-group full-row">
         <label class="label" for="descripcion_salida">Descripción (opcional)</label>
-        <textarea class="input" id="descripcion_salida" name="descripcion" maxlength="255" placeholder="Ej.: pago correspondiente a la jornada"></textarea>
+        <textarea class="input" id="descripcion_salida" name="descripcion" maxlength="255" placeholder="Ej.: pago correspondiente al turno"></textarea>
       </div>
     </div>
     <div class="module-actions"><button class="btn" type="submit" <?= (float)$resumenActual['saldo_teorico'] <= 0 ? 'disabled' : '' ?>>Registrar salida</button></div>
@@ -284,7 +288,7 @@ $paginaCajaUrl = static function (int $pagina): string {
 <div class="profile-card wide-card">
   <div class="profile-card-header">
     <div class="profile-icon">📋</div>
-    <div><h2>Movimientos de efectivo de la jornada</h2><p>Salidas registradas antes del cierre.</p></div>
+    <div><h2>Movimientos de efectivo del turno</h2><p>Salidas registradas durante este turno antes del cierre.</p></div>
   </div>
   <div class="table-responsive">
     <table class="result-table">
@@ -301,7 +305,7 @@ $paginaCajaUrl = static function (int $pagina): string {
             <td><?= htmlspecialchars((string)($mov['descripcion'] ?: '-')) ?></td>
           </tr>
         <?php endforeach; ?>
-        <?php if (!$haySalidas): ?><tr><td colspan="5" class="empty-cell">No hay salidas de efectivo registradas durante esta jornada.</td></tr><?php endif; ?>
+        <?php if (!$haySalidas): ?><tr><td colspan="5" class="empty-cell">No hay salidas de efectivo registradas durante este turno.</td></tr><?php endif; ?>
       </tbody>
     </table>
   </div>
@@ -311,12 +315,12 @@ $paginaCajaUrl = static function (int $pagina): string {
   <div class="profile-card-header">
     <div class="profile-icon">💵</div>
     <div>
-      <h2>Cerrar caja del <?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaGestion['fecha_caja']))) ?></h2>
+      <h2>Cerrar Turno <?= (int)($cajaGestion['numero_turno'] ?? 1) ?> · <?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaGestion['fecha_caja']))) ?></h2>
       <p>Cuenta los billetes físicos. El total contado se comparará contra el saldo teórico de <?= $moneyCaja((float)$resumenActual['saldo_teorico']) ?>.</p>
     </div>
   </div>
 
-  <form method="post" action="index.php?mod=caja" class="profile-form" id="cierreCajaForm" data-saldo-teorico="<?= htmlspecialchars(number_format((float)$resumenActual['saldo_teorico'], 2, '.', '')) ?>" data-confirm="¿Confirmar el cierre? Después de cerrar esta caja no podrá reabrirse.">
+  <form method="post" action="index.php?mod=caja" class="profile-form" id="cierreCajaForm" data-saldo-teorico="<?= htmlspecialchars(number_format((float)$resumenActual['saldo_teorico'], 2, '.', '')) ?>">
     <input type="hidden" name="form" value="cerrar_caja">
     <input type="hidden" name="id_caja" value="<?= (int)$cajaGestion['id_caja'] ?>">
 
@@ -355,6 +359,93 @@ $paginaCajaUrl = static function (int $pagina): string {
   </form>
 </div>
 
+<div class="caja-modal" id="modalResumenCierre" hidden aria-hidden="true">
+  <div class="caja-modal-backdrop" data-cerrar-modal></div>
+  <section class="caja-modal-panel" role="dialog" aria-modal="true" aria-labelledby="tituloResumenCierre">
+    <div class="caja-modal-header">
+      <div>
+        <p class="eyebrow">Confirmación final</p>
+        <h2 id="tituloResumenCierre">Detalle de cierre de caja</h2>
+        <p>Revisa todo el turno y el arqueo antes de guardar el cierre definitivamente.</p>
+      </div>
+      <button type="button" class="caja-modal-close" data-cerrar-modal aria-label="Cerrar">×</button>
+    </div>
+
+    <div class="caja-modal-body">
+      <div class="profile-grid caja-modal-datos">
+        <div class="form-group"><label class="label">Fecha de caja</label><div><?= htmlspecialchars(date('d/m/Y', strtotime((string)$cajaGestion['fecha_caja']))) ?></div></div>
+        <div class="form-group"><label class="label">Turno</label><div>Turno <?= (int)($cajaGestion['numero_turno'] ?? 1) ?></div></div>
+        <div class="form-group"><label class="label">Usuario de apertura</label><div><?= htmlspecialchars((string)($cajaGestion['usuario_apertura'] ?? '-')) ?></div></div>
+        <div class="form-group"><label class="label">Hora de apertura</label><div><?= htmlspecialchars(date('H:i', strtotime((string)$cajaGestion['fecha_apertura']))) ?></div></div>
+        <div class="form-group"><label class="label">Ventas realizadas</label><div><?= (int)$resumenActual['cantidad_ventas'] ?></div></div>
+      </div>
+
+      <div class="report-kpis report-summary-kpis caja-modal-kpis">
+        <article class="report-kpi"><span>Fondo inicial</span><strong><?= $moneyCaja((float)$resumenActual['monto_apertura']) ?></strong><small>efectivo al comenzar</small></article>
+        <article class="report-kpi"><span>Total vendido</span><strong><?= $moneyCaja((float)$resumenActual['total_ventas']) ?></strong><small>facturación registrada</small></article>
+        <article class="report-kpi kpi-danger"><span>Reintegros en efectivo</span><strong><?= $moneyCaja((float)$resumenActual['reintegros_efectivo']) ?></strong><small><?= (int)$resumenActual['cantidad_reintegros'] ?> reintegro(s)</small></article>
+        <article class="report-kpi kpi-danger"><span>Salidas de efectivo</span><strong><?= $moneyCaja((float)$resumenActual['salidas_jornada']) ?></strong><small>extracciones del turno</small></article>
+        <article class="report-kpi"><span>Saldo teórico</span><strong><?= $moneyCaja((float)$resumenActual['saldo_teorico']) ?></strong><small>efectivo esperado</small></article>
+        <article class="report-kpi"><span>Efectivo contado</span><strong id="modalTotalContado">$0,00</strong><small>según billetes ingresados</small></article>
+        <article class="report-kpi" id="modalKpiDiferencia"><span>Diferencia</span><strong id="modalDiferencia">$0,00</strong><small id="modalEstadoDiferencia">pendiente</small></article>
+      </div>
+
+      <div class="caja-modal-section">
+        <h3>Medios de pago</h3>
+        <div class="table-responsive">
+          <table class="result-table">
+            <thead><tr><th>Medio de pago</th><th>Total cobrado</th></tr></thead>
+            <tbody>
+              <?php if (!empty($resumenActual['pagos_por_medio'])): ?>
+                <?php foreach ($resumenActual['pagos_por_medio'] as $nombreMedio => $totalMedio): ?>
+                  <tr><td><?= htmlspecialchars((string)$nombreMedio) ?></td><td><strong><?= $moneyCaja((float)$totalMedio) ?></strong></td></tr>
+                <?php endforeach; ?>
+              <?php else: ?>
+                <tr><td colspan="2" class="empty-cell">No se registraron cobros durante este turno.</td></tr>
+              <?php endif; ?>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="caja-modal-section">
+        <h3>Conteo de billetes</h3>
+        <div class="table-responsive">
+          <table class="result-table">
+            <thead><tr><th>Billete</th><th>Cantidad</th><th>Subtotal</th></tr></thead>
+            <tbody id="modalDetalleBilletes"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="caja-modal-section">
+        <h3>Observación de cierre</h3>
+        <div class="caja-modal-observacion" id="modalObservacionCierre">Sin observaciones.</div>
+      </div>
+    </div>
+
+    <div class="caja-modal-actions">
+      <button type="button" class="btn-secondary-link" data-cerrar-modal>Volver al arqueo</button>
+      <button type="button" class="btn-danger-solid" id="confirmarCierreCaja">Confirmar cierre de caja</button>
+    </div>
+  </section>
+</div>
+
+<style>
+.caja-modal[hidden]{display:none}
+.caja-modal{position:fixed;inset:0;z-index:2000;display:flex;align-items:center;justify-content:center;padding:24px}
+.caja-modal-backdrop{position:absolute;inset:0;background:rgba(15,23,42,.58);backdrop-filter:blur(2px)}
+.caja-modal-panel{position:relative;width:min(980px,96vw);max-height:92vh;overflow:auto;background:#fff;border-radius:18px;box-shadow:0 24px 70px rgba(15,23,42,.28);padding:24px}
+.caja-modal-header{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;border-bottom:1px solid #e5e7eb;padding-bottom:16px;margin-bottom:18px}
+.caja-modal-header h2{margin:2px 0 6px}.caja-modal-header p{margin:0;color:#667085}
+.caja-modal-close{border:0;background:#f3f4f6;border-radius:10px;width:38px;height:38px;font-size:26px;line-height:1;cursor:pointer;color:#475467}
+.caja-modal-body{display:grid;gap:18px}.caja-modal-datos{padding:14px;background:#f8fafc;border-radius:12px}
+.caja-modal-kpis{margin:0}.caja-modal-section h3{margin:0 0 10px}.caja-modal-observacion{padding:13px 14px;background:#f8fafc;border:1px solid #e5e7eb;border-radius:10px;white-space:pre-wrap}
+.caja-modal-actions{display:flex;justify-content:flex-end;gap:10px;padding-top:20px;margin-top:20px;border-top:1px solid #e5e7eb}
+body.caja-modal-open{overflow:hidden}
+@media (max-width:700px){.caja-modal{padding:10px}.caja-modal-panel{padding:16px;max-height:96vh}.caja-modal-actions{flex-direction:column-reverse}.caja-modal-actions button{width:100%}}
+</style>
+
 <script>
 (() => {
   const form = document.getElementById('cierreCajaForm');
@@ -363,8 +454,18 @@ $paginaCajaUrl = static function (int $pagina): string {
   const diferenciaEl = document.getElementById('diferenciaCaja');
   const estadoEl = document.getElementById('estadoDiferenciaCaja');
   const observacion = document.getElementById('observacion_cierre');
-  if (!form || !table || !totalEl || !diferenciaEl || !estadoEl || !observacion) return;
+  const modal = document.getElementById('modalResumenCierre');
+  const confirmarBtn = document.getElementById('confirmarCierreCaja');
+  const modalTotal = document.getElementById('modalTotalContado');
+  const modalDiferencia = document.getElementById('modalDiferencia');
+  const modalEstado = document.getElementById('modalEstadoDiferencia');
+  const modalBilletes = document.getElementById('modalDetalleBilletes');
+  const modalObservacion = document.getElementById('modalObservacionCierre');
+  if (!form || !table || !totalEl || !diferenciaEl || !estadoEl || !observacion || !modal || !confirmarBtn || !modalTotal || !modalDiferencia || !modalEstado || !modalBilletes || !modalObservacion) return;
 
+  let cierreConfirmado = false;
+  let ultimoTotal = 0;
+  let ultimaDiferencia = 0;
   const saldoTeorico = Number(form.dataset.saldoTeorico || 0);
   const money = value => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value || 0);
   const refresh = () => {
@@ -379,6 +480,8 @@ $paginaCajaUrl = static function (int $pagina): string {
     });
 
     const diferencia = Math.round((total - saldoTeorico) * 100) / 100;
+    ultimoTotal = total;
+    ultimaDiferencia = diferencia;
     totalEl.textContent = money(total);
     diferenciaEl.textContent = money(diferencia);
 
@@ -393,6 +496,66 @@ $paginaCajaUrl = static function (int $pagina): string {
       observacion.required = true;
     }
   };
+
+  const cerrarModal = () => {
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('caja-modal-open');
+  };
+
+  const abrirModal = () => {
+    refresh();
+    modalTotal.textContent = money(ultimoTotal);
+    modalDiferencia.textContent = money(ultimaDiferencia);
+    modalEstado.textContent = Math.abs(ultimaDiferencia) < 0.01 ? 'caja correcta' : (ultimaDiferencia < 0 ? 'faltante' : 'sobrante');
+    modalObservacion.textContent = observacion.value.trim() || 'Sin observaciones.';
+
+    modalBilletes.innerHTML = '';
+    let hayBilletes = false;
+    table.querySelectorAll('tbody tr[data-denominacion]').forEach(row => {
+      const denominacion = Number(row.dataset.denominacion || 0);
+      const input = row.querySelector('.cantidad-billete');
+      const cantidad = Math.max(0, parseInt(input?.value || '0', 10) || 0);
+      if (cantidad <= 0) return;
+      hayBilletes = true;
+      const tr = document.createElement('tr');
+      const subtotal = denominacion * cantidad;
+      tr.innerHTML = `<td><strong>${money(denominacion)}</strong></td><td>${cantidad}</td><td><strong>${money(subtotal)}</strong></td>`;
+      modalBilletes.appendChild(tr);
+    });
+    if (!hayBilletes) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="3" class="empty-cell">No se ingresaron billetes en el arqueo.</td>';
+      modalBilletes.appendChild(tr);
+    }
+
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('caja-modal-open');
+    confirmarBtn.focus();
+  };
+
+  form.addEventListener('submit', event => {
+    if (cierreConfirmado) return;
+    event.preventDefault();
+    refresh();
+    if (!form.checkValidity()) {
+      form.reportValidity();
+      return;
+    }
+    abrirModal();
+  });
+
+  confirmarBtn.addEventListener('click', () => {
+    cierreConfirmado = true;
+    cerrarModal();
+    form.requestSubmit();
+  });
+
+  modal.querySelectorAll('[data-cerrar-modal]').forEach(element => element.addEventListener('click', cerrarModal));
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !modal.hidden) cerrarModal();
+  });
 
   table.querySelectorAll('.cantidad-billete').forEach(input => input.addEventListener('input', refresh));
   refresh();
@@ -456,7 +619,7 @@ $paginaCajaUrl = static function (int $pagina): string {
 <div class="profile-card wide-card">
   <div class="profile-card-header">
     <div class="profile-icon">📚</div>
-    <div><h2>Historial de cajas</h2><p>Aperturas, saldos teóricos, conteos y diferencias registradas.</p></div>
+    <div><h2>Historial de cajas por turno</h2><p>Aperturas, turnos, saldos teóricos, conteos y diferencias registradas.</p></div>
     <div class="profile-actions">
       <a class="btn-icon" href="actions/export_cajas.php" title="Exportar historial a Excel" aria-label="Exportar historial a Excel">📊</a>
     </div>
@@ -464,11 +627,12 @@ $paginaCajaUrl = static function (int $pagina): string {
 
   <div class="table-responsive">
     <table class="result-table">
-      <thead><tr><th>Fecha</th><th>Estado</th><th>Fondo inicial</th><th>Apertura</th><th>Cierre</th><th>Saldo teórico</th><th>Contado</th><th>Diferencia</th><th>Acciones</th></tr></thead>
+      <thead><tr><th>Fecha</th><th>Turno</th><th>Estado</th><th>Fondo inicial</th><th>Apertura</th><th>Cierre</th><th>Saldo teórico</th><th>Contado</th><th>Diferencia</th><th>Acciones</th></tr></thead>
       <tbody>
         <?php foreach ($historialCajas as $fila): ?>
           <tr>
             <td><?= htmlspecialchars(date('d/m/Y', strtotime((string)$fila['fecha_caja']))) ?></td>
+            <td><strong>Turno <?= (int)($fila['numero_turno'] ?? 1) ?></strong></td>
             <td><span class="status-badge <?= strtoupper((string)$fila['estado_caja']) === 'ABIERTA' ? 'status-used' : 'status-active' ?>"><?= htmlspecialchars((string)$fila['estado_caja']) ?></span></td>
             <td><?= $moneyCaja((float)$fila['monto_apertura']) ?></td>
             <td><?= htmlspecialchars((string)$fila['usuario_apertura']) ?><br><small><?= htmlspecialchars(date('H:i', strtotime((string)$fila['fecha_apertura']))) ?></small></td>
@@ -479,14 +643,14 @@ $paginaCajaUrl = static function (int $pagina): string {
             <td class="actions-cell"><a class="btn-small" href="index.php?mod=caja&action=detail&id=<?= (int)$fila['id_caja'] ?>">Ver detalle</a></td>
           </tr>
         <?php endforeach; ?>
-        <?php if (!$historialCajas): ?><tr><td colspan="9" class="empty-cell">Todavía no hay cajas registradas.</td></tr><?php endif; ?>
+        <?php if (!$historialCajas): ?><tr><td colspan="10" class="empty-cell">Todavía no hay cajas registradas.</td></tr><?php endif; ?>
       </tbody>
     </table>
   </div>
 
   <?php if ($totalCajas > 0): ?>
     <div class="pagination-bar">
-      <div class="pagination-summary"><?= $totalCajas ?> cajas registradas · Página <?= $paginaActual ?> de <?= $totalPaginas ?></div>
+      <div class="pagination-summary"><?= $totalCajas ?> turnos registrados · Página <?= $paginaActual ?> de <?= $totalPaginas ?></div>
       <nav class="pagination" aria-label="Paginación de cajas">
         <a class="page-link <?= $paginaActual <= 1 ? 'disabled' : '' ?>" href="<?= $paginaActual > 1 ? htmlspecialchars($paginaCajaUrl($paginaActual - 1)) : '#' ?>">‹ Anterior</a>
         <?php

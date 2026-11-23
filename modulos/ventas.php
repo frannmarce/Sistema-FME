@@ -33,7 +33,7 @@ $productosVenta = $pdo->query("SELECT id_producto, nombre_producto, codigo_barra
                                 WHERE activo_producto = 1
                                   AND stock_producto > 0
                                 ORDER BY nombre_producto ASC")->fetchAll(PDO::FETCH_ASSOC);
-$mediosPago = $pdo->query("SELECT id_medio, nombre_medio FROM Medio_pago WHERE LOWER(nombre_medio) <> 'mixto' ORDER BY nombre_medio ASC")->fetchAll(PDO::FETCH_ASSOC);
+$mediosPago = $pdo->query("SELECT id_medio, nombre_medio FROM Medio_pago WHERE LOWER(nombre_medio) NOT IN ('mixto', 'sin especificar') ORDER BY nombre_medio ASC")->fetchAll(PDO::FETCH_ASSOC);
 
 if ($action === 'add'):
 ?>
@@ -110,7 +110,7 @@ if ($action === 'add'):
       <div class="section-heading-row">
         <div>
           <h3>Pago y total</h3>
-          <p class="section-help">Puedes usar un único medio o dividir el total entre varios medios de pago.</p>
+          <p class="section-help">Puedes usar un único medio o dividir el total entre varios medios. Si el cliente entrega efectivo de más, el sistema calcula el vuelto automáticamente.</p>
         </div>
         <button class="btn-add compact-btn" type="button" id="agregarPago">+ Agregar medio</button>
       </div>
@@ -173,6 +173,7 @@ if ($action === 'add'):
   const money = value => new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(value || 0);
 
   function updateTotals() {
+    const previousSaleTotal = currentSaleTotal;
     let total = 0;
     container.querySelectorAll('.sale-item-row').forEach(row => {
       const select = row.querySelector('.producto-select');
@@ -188,18 +189,21 @@ if ($action === 'add'):
     });
     currentSaleTotal = Math.round(total * 100) / 100;
     totalEl.textContent = money(currentSaleTotal);
-    updatePayments();
+    updatePayments(previousSaleTotal);
   }
 
   function paymentRows() {
     return Array.from(paymentsContainer.querySelectorAll('.payment-row'));
   }
 
-  function updatePayments() {
+  function updatePayments(previousSaleTotal = null) {
     const rows = paymentRows();
-    if (rows.length === 1) {
+    if (rows.length === 1 && previousSaleTotal !== null) {
       const input = rows[0].querySelector('.pago-monto-input');
-      if (input) input.value = currentSaleTotal.toFixed(2);
+      const valorActual = Math.max(0, parseFloat(input?.value || '0'));
+      if (input && (valorActual <= 0 || Math.abs(valorActual - previousSaleTotal) < 0.009)) {
+        input.value = currentSaleTotal.toFixed(2);
+      }
     }
 
     let paid = 0;
@@ -212,13 +216,13 @@ if ($action === 'add'):
     if (paymentRemainingEl) {
       paymentRemainingEl.textContent = Math.abs(remaining) < 0.01
         ? 'Pagos completos'
-        : (remaining > 0 ? 'Restante: ' + money(remaining) : 'Exceso: ' + money(Math.abs(remaining)));
+        : (remaining > 0 ? 'Restante: ' + money(remaining) : 'Vuelto: ' + money(Math.abs(remaining)));
     }
   }
 
   function bindPaymentRow(row) {
-    row.querySelector('.pago-monto-input')?.addEventListener('input', updatePayments);
-    row.querySelector('.pago-medio-select')?.addEventListener('change', updatePayments);
+    row.querySelector('.pago-monto-input')?.addEventListener('input', () => updatePayments());
+    row.querySelector('.pago-medio-select')?.addEventListener('change', () => updatePayments());
     row.querySelector('.remove-payment-btn')?.addEventListener('click', () => {
       if (paymentRows().length > 1) {
         row.remove();
@@ -348,9 +352,34 @@ if ($action === 'add'):
       alert('Selecciona un medio para cada pago.');
       return;
     }
-    if (Math.abs(paid - currentSaleTotal) > 0.009) {
+    if (paid + 0.009 < currentSaleTotal) {
       event.preventDefault();
-      alert('La suma de los pagos debe coincidir exactamente con el total de la venta.');
+      alert('El importe entregado no alcanza para cubrir el total de la venta.');
+      return;
+    }
+
+    const vuelto = Math.round(Math.max(0, paid - currentSaleTotal) * 100) / 100;
+    if (vuelto > 0.009) {
+      let efectivoEntregado = 0;
+      rows.forEach(row => {
+        const select = row.querySelector('.pago-medio-select');
+        const option = select?.options[select.selectedIndex];
+        const nombre = (option?.textContent || '').trim().toLowerCase();
+        if (nombre === 'efectivo') {
+          efectivoEntregado += Math.max(0, parseFloat(row.querySelector('.pago-monto-input')?.value || '0'));
+        }
+      });
+      efectivoEntregado = Math.round(efectivoEntregado * 100) / 100;
+
+      if (efectivoEntregado <= 0) {
+        event.preventDefault();
+        alert('El excedente solo puede devolverse como vuelto cuando hay un pago en efectivo.');
+        return;
+      }
+      if (vuelto - efectivoEntregado > 0.009) {
+        event.preventDefault();
+        alert('El vuelto no puede superar el efectivo entregado por el cliente.');
+      }
     }
   });
 
@@ -689,7 +718,7 @@ $exportVentasQuery = http_build_query([
               <a class="btn-secondary-link compact-btn"
                  href="actions/factura_venta.php?id=<?= (int)$v['id_venta'] ?>"
                  target="_blank" rel="noopener"
-                 title="Abrir comprobante PDF para imprimir">🖨 Imprimir comprobante</a>
+                 title="Abrir factura en PDF para imprimir">🖨 Imprimir factura</a>
               <?php if (!$esCancelada): ?>
                 <a class="btn-danger compact-btn" href="index.php?mod=ventas&action=cancel&id=<?= (int)$v['id_venta'] ?>">Cancelar venta</a>
               <?php else: ?>

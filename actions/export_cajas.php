@@ -26,7 +26,7 @@ if (!$stmt->fetchColumn()) {
 }
 
 try {
-    $sql = "SELECT c.id_caja, c.fecha_caja, c.estado_caja, c.monto_apertura,
+    $sql = "SELECT c.id_caja, c.fecha_caja, c.numero_turno, c.estado_caja, c.monto_apertura,
                    c.fecha_apertura, c.fecha_cierre, c.efectivo_esperado,
                    c.efectivo_contado, c.diferencia,
                    c.observacion_apertura, c.observacion_cierre,
@@ -38,12 +38,12 @@ try {
             INNER JOIN Usuario ua ON ua.id_usuario = c.id_usuario_apertura
             LEFT JOIN Usuario uc ON uc.id_usuario = c.id_usuario_cierre
             LEFT JOIN Caja_Movimiento cm ON cm.id_caja = c.id_caja
-            GROUP BY c.id_caja, c.fecha_caja, c.estado_caja, c.monto_apertura,
+            GROUP BY c.id_caja, c.fecha_caja, c.numero_turno, c.estado_caja, c.monto_apertura,
                      c.fecha_apertura, c.fecha_cierre, c.efectivo_esperado,
                      c.efectivo_contado, c.diferencia,
                      c.observacion_apertura, c.observacion_cierre,
                      ua.nombre_usuario, uc.nombre_usuario
-            ORDER BY c.fecha_caja DESC, c.id_caja DESC";
+            ORDER BY c.fecha_caja DESC, c.numero_turno DESC, c.id_caja DESC";
     $stmt = $pdo->query($sql);
 
     header('Content-Type: text/csv; charset=utf-8');
@@ -55,8 +55,8 @@ try {
     fwrite($output, "\xEF\xBB\xBF");
 
     fputcsv($output, [
-        'ID Caja', 'Fecha', 'Estado', 'Fondo inicial', 'Usuario apertura', 'Fecha apertura',
-        'Usuario cierre', 'Fecha cierre', 'Salidas durante jornada', 'Saldo teorico al cierre',
+        'ID Caja', 'Fecha', 'Turno', 'Estado', 'Fondo inicial', 'Usuario apertura', 'Fecha apertura',
+        'Usuario cierre', 'Fecha cierre', 'Salidas durante turno', 'Saldo teorico al cierre',
         'Efectivo contado', 'Diferencia', 'Retiros posteriores',
         'Observacion apertura', 'Observacion cierre'
     ], ';');
@@ -65,6 +65,7 @@ try {
         fputcsv($output, [
             $row['id_caja'],
             $row['fecha_caja'],
+            $row['numero_turno'],
             $row['estado_caja'],
             $row['monto_apertura'],
             $row['usuario_apertura'] ?: '-',

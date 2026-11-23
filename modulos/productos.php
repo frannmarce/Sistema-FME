@@ -267,8 +267,9 @@ if ($action === 'edit' && isset($_GET['id'])):
         <input class="input" type="number" step="0.01" min="0" name="precio_producto" value="<?= htmlspecialchars((string)$prod['precio_producto']) ?>" required>
       </div>
       <div class="form-group">
-        <label class="label">Stock</label>
-        <input class="input" type="number" min="0" step="1" name="stock_producto" value="<?= (int)$prod['stock_producto'] ?>" required>
+        <label class="label">Stock actual</label>
+        <input class="input" type="number" value="<?= (int)$prod['stock_producto'] ?>" disabled aria-disabled="true" style="background: #e9ecef; color: #6c757d; cursor: not-allowed;">
+        <small class="field-help">El stock se modifica desde el módulo Movimientos.</small>
       </div>
       <div class="form-group">
         <label class="label">Categoría</label>

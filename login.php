@@ -73,7 +73,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     </div>
     <div class="auth-brand-content">
       <span class="auth-kicker">Acceso al sistema</span>
-      <h2>Todo tu negocio, organizado en un solo lugar.</h2>
+      <h2>Bienvenido al Sistema FME.</h2>
       <p>Gestiona inventario, ventas, movimientos, reportes y permisos desde una interfaz clara y segura.</p>
       <ul class="auth-features">
         <li class="auth-feature"><span class="auth-feature-icon">✓</span><span>Inventario y stock centralizados</span></li>

@@ -31,7 +31,7 @@ $stmt = $pdo->prepare(
 );
 $stmt->execute([$rolId]);
 if (!$stmt->fetchColumn()) {
-    flash('error', 'No tienes permiso para consultar comprobantes de ventas.');
+    flash('error', 'No tienes permiso para consultar facturas de ventas.');
     header('Location: ../index.php');
     exit;
 }
@@ -61,7 +61,7 @@ try {
     }
 
     $stmt = $pdo->prepare(
-        "SELECT mp.nombre_medio, vp.monto
+        "SELECT mp.nombre_medio, vp.monto, COALESCE(vp.monto_entregado, vp.monto) AS monto_entregado
          FROM Venta_Pago vp
          INNER JOIN Medio_pago mp ON mp.id_medio = vp.id_medio
          WHERE vp.id_venta = ?
@@ -90,7 +90,7 @@ try {
     }
 
     $pdf = generarFacturaVentaPdf($venta, $detalle, $pagos);
-    $filename = 'comprobante_FME_' . str_pad((string)$idVenta, 6, '0', STR_PAD_LEFT) . '.pdf';
+    $filename = 'factura_b_FME_' . str_pad((string)$idVenta, 6, '0', STR_PAD_LEFT) . '.pdf';
 
     header('Content-Type: application/pdf');
     header('Content-Disposition: inline; filename="' . $filename . '"');
@@ -100,8 +100,8 @@ try {
     echo $pdf;
     exit;
 } catch (Throwable $e) {
-    error_log('FME - Comprobante PDF venta #' . $idVenta . ': ' . $e->getMessage());
-    flash('error', 'No se pudo generar el comprobante PDF de la venta seleccionada.');
+    error_log('FME - Factura PDF venta #' . $idVenta . ': ' . $e->getMessage());
+    flash('error', 'No se pudo generar la factura PDF de la venta seleccionada.');
     header('Location: ../index.php?mod=ventas');
     exit;
 }

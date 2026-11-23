@@ -21,6 +21,15 @@ $ventasPorMedioPago = [];
 $reporteMaxMedioPago = 0.0;
 $reporteTotalMediosPago = 0.0;
 $reporteMediosPagoError = null;
+$ventasPorCategoria = [];
+$reporteVentasCategoriaTotal = 0;
+$reporteVentasCategoriaError = null;
+$estadoInventario = [];
+$reporteInventarioTotal = 0;
+$reporteInventarioError = null;
+$estadoVentas = [];
+$reporteEstadoVentasTotal = 0;
+$reporteEstadoVentasError = null;
 $reporteCancelacionesCantidad = 0;
 $reporteReintegrosTotal = 0.0;
 $reporteCancelaciones = [];
@@ -309,5 +318,109 @@ if ($modActual === 'reportes') {
     } catch (Throwable $e) {
         error_log('FME - Reporte de ventas por medio de pago: ' . $e->getMessage());
         $reporteMediosPagoError = 'No se pudo generar el gráfico de ventas por medio de pago.';
+    }
+
+    /* =========================
+       INFORME GRÁFICO 5
+       Distribución de ventas por categoría
+       ========================= */
+    try {
+        $whereCategoria = " WHERE v.estado_venta = 'ACTIVA'";
+        $paramsCategoria = [];
+        if ($reporteDesde !== '') {
+            $whereCategoria .= ' AND DATE(v.fecha_venta) >= ?';
+            $paramsCategoria[] = $reporteDesde;
+        }
+        if ($reporteHasta !== '') {
+            $whereCategoria .= ' AND DATE(v.fecha_venta) <= ?';
+            $paramsCategoria[] = $reporteHasta;
+        }
+
+        $stmt = $pdo->prepare(
+            "SELECT COALESCE(c.nombre_categoria, 'Sin categoría') AS categoria,
+                    COALESCE(SUM(dv.cantidad_detalle), 0) AS unidades,
+                    COALESCE(SUM(dv.cantidad_detalle * dv.precio_unitario), 0) AS importe
+             FROM Venta v
+             INNER JOIN Detalle_venta dv ON dv.id_venta = v.id_venta
+             INNER JOIN Producto p ON p.id_producto = dv.id_producto
+             LEFT JOIN Categoria c ON c.id_categoria = p.id_categoria" . $whereCategoria . "
+             GROUP BY c.id_categoria, c.nombre_categoria
+             ORDER BY unidades DESC, importe DESC, categoria ASC"
+        );
+        $stmt->execute($paramsCategoria);
+        $ventasPorCategoria = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($ventasPorCategoria as &$categoriaVenta) {
+            $categoriaVenta['unidades'] = (int) $categoriaVenta['unidades'];
+            $categoriaVenta['importe'] = (float) $categoriaVenta['importe'];
+            $reporteVentasCategoriaTotal += $categoriaVenta['unidades'];
+        }
+        unset($categoriaVenta);
+    } catch (Throwable $e) {
+        error_log('FME - Reporte de ventas por categoría: ' . $e->getMessage());
+        $reporteVentasCategoriaError = 'No se pudo generar el gráfico de ventas por categoría.';
+    }
+
+    /* =========================
+       INFORME GRÁFICO 6
+       Estado general del inventario actual
+       ========================= */
+    try {
+        $stmt = $pdo->query(
+            "SELECT
+                COALESCE(SUM(CASE WHEN stock_producto > 5 THEN 1 ELSE 0 END), 0) AS normal,
+                COALESCE(SUM(CASE WHEN stock_producto BETWEEN 1 AND 5 THEN 1 ELSE 0 END), 0) AS bajo,
+                COALESCE(SUM(CASE WHEN stock_producto = 0 THEN 1 ELSE 0 END), 0) AS sin_stock
+             FROM Producto
+             WHERE activo_producto = 1"
+        );
+        $inventarioFila = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $estadoInventario = [
+            ['estado' => 'Stock normal', 'cantidad' => (int) ($inventarioFila['normal'] ?? 0)],
+            ['estado' => 'Stock bajo', 'cantidad' => (int) ($inventarioFila['bajo'] ?? 0)],
+            ['estado' => 'Sin stock', 'cantidad' => (int) ($inventarioFila['sin_stock'] ?? 0)],
+        ];
+        foreach ($estadoInventario as $estadoInventarioFila) {
+            $reporteInventarioTotal += (int) $estadoInventarioFila['cantidad'];
+        }
+    } catch (Throwable $e) {
+        error_log('FME - Reporte de estado del inventario: ' . $e->getMessage());
+        $reporteInventarioError = 'No se pudo generar el gráfico de estado del inventario.';
+    }
+
+    /* =========================
+       INFORME GRÁFICO 7
+       Estado de las ventas (activas vs canceladas)
+       El período se aplica sobre fecha_venta para comparar el mismo universo.
+       ========================= */
+    try {
+        $whereEstadoVenta = ' WHERE 1=1';
+        $paramsEstadoVenta = [];
+        if ($reporteDesde !== '') {
+            $whereEstadoVenta .= ' AND DATE(v.fecha_venta) >= ?';
+            $paramsEstadoVenta[] = $reporteDesde;
+        }
+        if ($reporteHasta !== '') {
+            $whereEstadoVenta .= ' AND DATE(v.fecha_venta) <= ?';
+            $paramsEstadoVenta[] = $reporteHasta;
+        }
+
+        $stmt = $pdo->prepare(
+            "SELECT
+                COALESCE(SUM(CASE WHEN v.estado_venta = 'ACTIVA' THEN 1 ELSE 0 END), 0) AS activas,
+                COALESCE(SUM(CASE WHEN v.estado_venta = 'CANCELADA' THEN 1 ELSE 0 END), 0) AS canceladas
+             FROM Venta v" . $whereEstadoVenta
+        );
+        $stmt->execute($paramsEstadoVenta);
+        $estadoVentaFila = $stmt->fetch(PDO::FETCH_ASSOC) ?: [];
+        $estadoVentas = [
+            ['estado' => 'Ventas activas', 'cantidad' => (int) ($estadoVentaFila['activas'] ?? 0)],
+            ['estado' => 'Ventas canceladas', 'cantidad' => (int) ($estadoVentaFila['canceladas'] ?? 0)],
+        ];
+        foreach ($estadoVentas as $estadoVenta) {
+            $reporteEstadoVentasTotal += (int) $estadoVenta['cantidad'];
+        }
+    } catch (Throwable $e) {
+        error_log('FME - Reporte de estado de ventas: ' . $e->getMessage());
+        $reporteEstadoVentasError = 'No se pudo generar el gráfico de estado de las ventas.';
     }
 }

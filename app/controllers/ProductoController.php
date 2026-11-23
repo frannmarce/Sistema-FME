@@ -213,7 +213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
         $nombre      = trim((string) ($_POST['nombre_producto'] ?? ''));
         $codigo      = trim((string) ($_POST['codigo_barras'] ?? ''));
         $precioRaw   = trim((string) ($_POST['precio_producto'] ?? ''));
-        $stockRaw    = trim((string) ($_POST['stock_producto'] ?? ''));
         $idCategoria = (int) ($_POST['id_categoria'] ?? 0);
         $idProveedor = (int) ($_POST['id_proveedor'] ?? 0);
 
@@ -223,7 +222,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
         if (mb_strlen($nombre) > 80) $errores[] = 'El nombre no puede superar los 80 caracteres.';
         if ($codigo !== '' && !fmeIsValidEan13($codigo)) $errores[] = 'El código de barras debe contener 13 dígitos válidos.';
         if ($precioRaw === '' || !is_numeric($precioRaw) || (float) $precioRaw < 0) $errores[] = 'El precio no es válido.';
-        if ($stockRaw === '' || !ctype_digit($stockRaw) || (int) $stockRaw < 0) $errores[] = 'El stock no es válido.';
         if ($idCategoria <= 0) $errores[] = 'Debe seleccionar una categoría.';
         if ($idProveedor <= 0) $errores[] = 'Debe seleccionar un proveedor.';
 
@@ -254,7 +252,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
         }
 
         $precio = round((float) $precioRaw, 2);
-        $stock = (int) $stockRaw;
 
         try {
             if ($codigo === '') {
@@ -263,16 +260,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'productos') {
 
             $stmt = $pdo->prepare(
                 'UPDATE Producto
-                 SET nombre_producto = ?, codigo_barras = ?, precio_producto = ?, stock_producto = ?,
+                 SET nombre_producto = ?, codigo_barras = ?, precio_producto = ?,
                      id_categoria = ?, id_proveedor = ?
                  WHERE id_producto = ?'
             );
-            $stmt->execute([$nombre, $codigo, $precio, $stock, $idCategoria, $idProveedor, $idProducto]);
+            $stmt->execute([$nombre, $codigo, $precio, $idCategoria, $idProveedor, $idProducto]);
             registrarAuditoria($pdo, 'productos', 'MODIFICAR', 'Producto', $idProducto, [
                 'nombre' => $nombre,
                 'codigo_barras' => $codigo,
                 'precio' => $precio,
-                'stock' => $stock,
             ]);
             flash('success', 'El producto se actualizó correctamente.');
             header('Location: index.php?mod=productos');

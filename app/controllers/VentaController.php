@@ -12,7 +12,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
 
   $form = $_POST['form'] ?? '';
 
-  // Facturación/Ventas solo puede operar con una caja abierta del día actual.
+  // Facturación/Ventas solo puede operar con un turno de caja abierto del día actual.
   $estadoCajaVenta = obtenerEstadoOperativoCaja($pdo);
   if (empty($estadoCajaVenta['habilita_ventas'])) {
     $mensajeCaja = (string)($estadoCajaVenta['mensaje'] ?? 'Debes abrir la caja antes de operar con ventas.');
@@ -22,7 +22,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
   }
   $idCajaVenta = (int)($estadoCajaVenta['caja']['id_caja'] ?? 0);
   if ($idCajaVenta <= 0) {
-    flash('error', 'No se pudo identificar la caja abierta del día.');
+    flash('error', 'No se pudo identificar el turno de caja abierto.');
     header('Location: index.php?mod=caja');
     exit;
   }
@@ -139,28 +139,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
         throw new RuntimeException('La venta no contiene productos válidos.');
       }
 
-      $totalPagos = round(array_sum($pagos), 2);
-      if (abs($totalPagos - $totalVenta) > 0.009) {
-        throw new RuntimeException(
-          'La suma de los medios de pago ($' . number_format($totalPagos, 2, ',', '.') .
-          ') debe coincidir exactamente con el total de la venta ($' . number_format($totalVenta, 2, ',', '.') . ').'
-        );
-      }
-
       // Validamos todos los medios y evitamos que "Mixto" pueda cargarse como un pago real.
       $idsMedio = array_keys($pagos);
       $placeholders = implode(',', array_fill(0, count($idsMedio), '?'));
       $stmt = $pdo->prepare("SELECT id_medio, nombre_medio FROM Medio_pago WHERE id_medio IN ($placeholders)");
       $stmt->execute($idsMedio);
       $mediosValidos = [];
+      $idMedioEfectivo = 0;
       foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $medio) {
-        if (mb_strtolower(trim((string)$medio['nombre_medio'])) === 'mixto') {
-          throw new RuntimeException('El medio Mixto es de uso interno y no puede seleccionarse manualmente.');
+        $nombreMedioNormalizado = mb_strtolower(trim((string)$medio['nombre_medio']));
+        if (in_array($nombreMedioNormalizado, ['mixto', 'sin especificar'], true)) {
+          throw new RuntimeException('El medio seleccionado es de uso interno y no puede utilizarse en ventas nuevas.');
         }
-        $mediosValidos[(int)$medio['id_medio']] = (string)$medio['nombre_medio'];
+        $idMedioActual = (int)$medio['id_medio'];
+        $mediosValidos[$idMedioActual] = (string)$medio['nombre_medio'];
+        if ($nombreMedioNormalizado === 'efectivo') {
+          $idMedioEfectivo = $idMedioActual;
+        }
       }
       if (count($mediosValidos) !== count($idsMedio)) {
         throw new RuntimeException('Uno de los medios de pago seleccionados no existe.');
+      }
+
+      // El cliente puede entregar más dinero cuando hay efectivo. El excedente se devuelve como vuelto.
+      // Venta_Pago.monto conserva solo el importe aplicado a la venta para no inflar Caja, reportes ni reintegros.
+      $totalEntregado = round(array_sum($pagos), 2);
+      if ($totalEntregado + 0.009 < $totalVenta) {
+        throw new RuntimeException(
+          'El importe entregado ($' . number_format($totalEntregado, 2, ',', '.') .
+          ') no alcanza para cubrir el total de la venta ($' . number_format($totalVenta, 2, ',', '.') . ').'
+        );
+      }
+
+      $vuelto = round(max(0, $totalEntregado - $totalVenta), 2);
+      $pagosAplicados = $pagos;
+      if ($vuelto > 0.009) {
+        $efectivoEntregado = $idMedioEfectivo > 0 ? round((float)($pagos[$idMedioEfectivo] ?? 0), 2) : 0.0;
+        if ($efectivoEntregado <= 0) {
+          throw new RuntimeException('El excedente solo puede devolverse como vuelto cuando la venta incluye un pago en efectivo.');
+        }
+        if ($vuelto - $efectivoEntregado > 0.009) {
+          throw new RuntimeException('El vuelto no puede superar el efectivo entregado por el cliente.');
+        }
+        $pagosAplicados[$idMedioEfectivo] = round($efectivoEntregado - $vuelto, 2);
       }
 
       if (count($pagos) > 1) {
@@ -179,9 +200,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
       $stmt->execute([$totalVenta, $userId, $idMedioVenta, $idCajaVenta]);
       $idVenta = (int)$pdo->lastInsertId();
 
-      $stmtPago = $pdo->prepare('INSERT INTO Venta_Pago (id_venta, id_medio, monto) VALUES (?, ?, ?)');
-      foreach ($pagos as $idMedioPago => $montoPago) {
-        $stmtPago->execute([$idVenta, (int)$idMedioPago, $montoPago]);
+      $stmtPago = $pdo->prepare('INSERT INTO Venta_Pago (id_venta, id_medio, monto, monto_entregado) VALUES (?, ?, ?, ?)');
+      foreach ($pagos as $idMedioPago => $montoEntregado) {
+        $montoAplicado = round((float)($pagosAplicados[$idMedioPago] ?? $montoEntregado), 2);
+        $stmtPago->execute([$idVenta, (int)$idMedioPago, $montoAplicado, $montoEntregado]);
       }
 
       $stmtDetalle = $pdo->prepare('INSERT INTO Detalle_venta (id_venta, id_producto, cantidad_detalle, precio_unitario)
@@ -210,14 +232,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
       registrarAuditoria($pdo, 'ventas', 'CREAR', 'Venta', $idVenta, [
         'total' => $totalVenta,
         'medios_pago' => array_map(
-          static fn($id, $monto) => [
+          static fn($id, $montoEntregado) => [
             'id_medio' => (int)$id,
             'medio' => $mediosValidos[(int)$id] ?? 'Desconocido',
-            'monto' => (float)$monto,
+            'monto_aplicado' => (float)($pagosAplicados[(int)$id] ?? $montoEntregado),
+            'monto_entregado' => (float)$montoEntregado,
           ],
           array_keys($pagos),
           array_values($pagos)
         ),
+        'vuelto' => $vuelto,
         'caja_id' => $idCajaVenta,
         'productos_distintos' => count($detalle),
         'estado' => 'ACTIVA',
@@ -335,10 +359,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
       // estado; la información de la anulación se inserta como un nuevo registro.
       $stmt = $pdo->prepare(
         "INSERT INTO Cancelacion_Venta
-         (id_venta, fecha_cancelacion, monto_reintegrado, motivo_cancelacion, id_usuario)
-         VALUES (?, NOW(), ?, ?, ?)"
+         (id_venta, id_caja_reintegro, fecha_cancelacion, monto_reintegrado, motivo_cancelacion, id_usuario)
+         VALUES (?, ?, NOW(), ?, ?, ?)"
       );
-      $stmt->execute([$idVenta, $montoReintegrado, $motivoCancelacion, $userId]);
+      $stmt->execute([$idVenta, $idCajaVenta, $montoReintegrado, $motivoCancelacion, $userId]);
       $idCancelacion = (int)$pdo->lastInsertId();
 
       if ($idCancelacion <= 0) {
@@ -389,6 +413,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'ventas') {
 
       registrarAuditoria($pdo, 'ventas', 'CANCELAR', 'Cancelacion_Venta', $idCancelacion, [
         'venta_original_id' => $idVenta,
+        'id_caja_reintegro' => $idCajaVenta,
         'total_original' => $montoReintegrado,
         'monto_reintegrado' => $montoReintegrado,
         'motivo' => $motivoCancelacion,

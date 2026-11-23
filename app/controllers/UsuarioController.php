@@ -31,9 +31,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
 
         $rolActualUsuario = 0;
         $idPersonaUsuario = 0;
+        $cuilPersonaActual = '';
+
+        // Comparar CUIL/DNI sin guiones ni espacios para detectar si realmente cambió.
+        $normalizarCuil = static function (string $valor): string {
+            return preg_replace('/\D+/', '', $valor) ?? '';
+        };
 
         if (!$errores) {
-            $stmt = $pdo->prepare('SELECT id_rol, id_persona, nombre_usuario FROM Usuario WHERE id_usuario = ? LIMIT 1');
+            $stmt = $pdo->prepare(
+                'SELECT u.id_rol, u.id_persona, u.nombre_usuario, p.CUIL_persona
+                 FROM Usuario u
+                 LEFT JOIN Persona p ON p.id_persona = u.id_persona
+                 WHERE u.id_usuario = ?
+                 LIMIT 1'
+            );
             $stmt->execute([$idUsuario]);
             $usuarioActual = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -43,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
                 $rolActualUsuario = (int) $usuarioActual['id_rol'];
                 $idPersonaUsuario = (int) ($usuarioActual['id_persona'] ?? 0);
                 $nombreUsuarioAnterior = (string) ($usuarioActual['nombre_usuario'] ?? '');
+                $cuilPersonaActual = trim((string) ($usuarioActual['CUIL_persona'] ?? ''));
             }
         }
 
@@ -89,7 +102,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
             }
         }
 
-        if (!$errores && $cuilPersona !== '') {
+        $cuilCambio = $normalizarCuil($cuilPersona) !== $normalizarCuil($cuilPersonaActual);
+
+        // Solo validar unicidad si el usuario realmente cambió su CUIL/DNI.
+        // Así un cambio de perfil, correo o nombre no se bloquea por el CUIL que ya tenía asignado.
+        if (!$errores && $cuilPersona !== '' && $cuilCambio) {
             $stmt = $pdo->prepare(
                 'SELECT id_persona
                  FROM Persona
@@ -112,6 +129,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
         try {
             $pdo->beginTransaction();
 
+            // Revalidación definitiva dentro de la transacción: un perfil inactivo
+            // nunca puede asignarse aunque el formulario esté desactualizado o manipulado.
+            $stmt = $pdo->prepare(
+                'SELECT activo
+                 FROM Tipo_Rol
+                 WHERE id_rol = ?
+                 LIMIT 1
+                 FOR UPDATE'
+            );
+            $stmt->execute([$idRol]);
+            $rolActivoEnGuardado = $stmt->fetchColumn();
+
+            if ((int) $rolActivoEnGuardado !== 1) {
+                $pdo->rollBack();
+                flash('error', 'El perfil seleccionado está inactivo y no puede asignarse a un usuario.');
+                header('Location: index.php?mod=usuarios&action=edit&id=' . $idUsuario);
+                exit;
+            }
+
             $stmt = $pdo->prepare(
                 'UPDATE Usuario
                  SET nombre_usuario = ?, correo_usuario = ?, id_rol = ?
@@ -119,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
             );
             $stmt->execute([$nombreUsuario, $correoUsuario, $idRol, $idUsuario]);
 
-            if ($cuilPersona !== '' && $idPersonaUsuario > 0) {
+            if ($cuilPersona !== '' && $idPersonaUsuario > 0 && $cuilCambio) {
                 $stmt = $pdo->prepare('UPDATE Persona SET CUIL_persona = ? WHERE id_persona = ?');
                 $stmt->execute([$cuilPersona, $idPersonaUsuario]);
             }
