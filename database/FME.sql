@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS Usuario (
     contraseña_usuario VARCHAR(255) NOT NULL,
     id_persona INT NULL,
     id_rol INT NOT NULL,
+    activo_usuario TINYINT(1) NOT NULL DEFAULT 1,
     email_verificado TINYINT(1) NOT NULL DEFAULT 0,
     token_email VARCHAR(64) NULL,
     token_email_expira DATETIME NULL,
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS Usuario (
       ON DELETE SET NULL,
     CONSTRAINT fk_usuario_rol
       FOREIGN KEY (id_rol) REFERENCES Tipo_Rol(id_rol),
+    INDEX idx_usuario_activo (activo_usuario),
     INDEX idx_usuario_token_email (token_email),
     INDEX idx_usuario_token_password (token_password)
 ) ENGINE=InnoDB;
@@ -471,8 +473,6 @@ VALUES ('Argentina', 'Posadas', 'Av. Uruguay 2900');
 SET @dir_alim = LAST_INSERT_ID();
 INSERT INTO Proveedor (nombre_proveedor, telefono_proveedor, correo_proveedor, id_direccion)
 VALUES ('AlimFormosa', '3704665721', 'alim@gmail.com', @dir_alim);
-
--- Administrador inicial.
 
 INSERT INTO Direccion (nombre_pais, nombre_ciudad, num_direccion)
 VALUES ('Argentina', 'Formosa', 'Av. Gutnisky 590');

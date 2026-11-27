@@ -6,6 +6,111 @@
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
     $form = $_POST['form'] ?? '';
 
+    if ($form === 'toggle_usuario_estado') {
+        if (!isset($modulosPermitidosConArchivo['usuarios'])) {
+            flash('error', 'No tienes permiso para gestionar usuarios.');
+            header('Location: index.php');
+            exit;
+        }
+
+        $idUsuario = (int) ($_POST['id_usuario'] ?? 0);
+        $nuevoEstado = (int) ($_POST['nuevo_estado'] ?? -1);
+
+        if ($idUsuario <= 0 || !in_array($nuevoEstado, [0, 1], true)) {
+            flash('error', 'Solicitud de estado de usuario inválida.');
+            header('Location: index.php?mod=usuarios');
+            exit;
+        }
+
+        try {
+            $pdo->beginTransaction();
+
+            $stmt = $pdo->prepare(
+                'SELECT id_usuario, nombre_usuario, id_rol, activo_usuario
+                 FROM Usuario
+                 WHERE id_usuario = ?
+                 LIMIT 1
+                 FOR UPDATE'
+            );
+            $stmt->execute([$idUsuario]);
+            $usuarioEstado = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$usuarioEstado) {
+                $pdo->rollBack();
+                flash('error', 'El usuario seleccionado no existe.');
+                header('Location: index.php?mod=usuarios');
+                exit;
+            }
+
+            $estadoAnterior = (int) $usuarioEstado['activo_usuario'];
+            $rolUsuario = (int) $usuarioEstado['id_rol'];
+            $nombreUsuarioEstado = (string) $usuarioEstado['nombre_usuario'];
+
+            if ($estadoAnterior === $nuevoEstado) {
+                $pdo->commit();
+                flash('success', $nuevoEstado === 1 ? 'El usuario ya se encuentra activo.' : 'El usuario ya se encuentra inactivo.');
+                header('Location: index.php?mod=usuarios');
+                exit;
+            }
+
+            // Un usuario nunca puede darse de baja lógica a sí mismo.
+            if ($nuevoEstado === 0 && $idUsuario === $userId) {
+                $pdo->rollBack();
+                flash('error', 'No puedes desactivar tu propio usuario mientras tienes la sesión iniciada.');
+                header('Location: index.php?mod=usuarios');
+                exit;
+            }
+
+            // El sistema siempre debe conservar al menos un administrador activo.
+            if ($nuevoEstado === 0 && $rolUsuario === 1 && $estadoAnterior === 1) {
+                $stmt = $pdo->query(
+                    'SELECT id_usuario
+                     FROM Usuario
+                     WHERE id_rol = 1 AND activo_usuario = 1
+                     FOR UPDATE'
+                );
+                $administradoresActivos = $stmt->fetchAll(PDO::FETCH_COLUMN);
+
+                if (count($administradoresActivos) <= 1) {
+                    $pdo->rollBack();
+                    flash('error', 'No se puede desactivar al único administrador activo del sistema.');
+                    header('Location: index.php?mod=usuarios');
+                    exit;
+                }
+            }
+
+            $stmt = $pdo->prepare('UPDATE Usuario SET activo_usuario = ? WHERE id_usuario = ?');
+            $stmt->execute([$nuevoEstado, $idUsuario]);
+
+            $pdo->commit();
+
+            registrarAuditoria(
+                $pdo,
+                'usuarios',
+                $nuevoEstado === 1 ? 'REACTIVAR' : 'DESACTIVAR',
+                'Usuario',
+                $idUsuario,
+                [
+                    'usuario' => $nombreUsuarioEstado,
+                    'estado_anterior' => $estadoAnterior === 1 ? 'Activo' : 'Inactivo',
+                    'estado_actual' => $nuevoEstado === 1 ? 'Activo' : 'Inactivo',
+                ]
+            );
+
+            flash('success', $nuevoEstado === 1 ? 'Usuario reactivado correctamente.' : 'Usuario desactivado correctamente.');
+            header('Location: index.php?mod=usuarios');
+            exit;
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            error_log('FME - Estado de usuario: ' . $e->getMessage());
+            flash('error', 'No se pudo actualizar el estado del usuario.');
+            header('Location: index.php?mod=usuarios');
+            exit;
+        }
+    }
+
     if ($form === 'edit_usuario') {
         if (!isset($modulosPermitidosConArchivo['usuarios'])) {
             flash('error', 'No tienes permiso para editar usuarios.');
@@ -30,6 +135,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
         if ($idRol <= 0) $errores[] = 'Debe seleccionar un perfil válido.';
 
         $rolActualUsuario = 0;
+        $activoActualUsuario = 1;
         $idPersonaUsuario = 0;
         $cuilPersonaActual = '';
 
@@ -40,7 +146,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
 
         if (!$errores) {
             $stmt = $pdo->prepare(
-                'SELECT u.id_rol, u.id_persona, u.nombre_usuario, p.CUIL_persona
+                'SELECT u.id_rol, u.id_persona, u.nombre_usuario, u.activo_usuario, p.CUIL_persona
                  FROM Usuario u
                  LEFT JOIN Persona p ON p.id_persona = u.id_persona
                  WHERE u.id_usuario = ?
@@ -53,6 +159,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
                 $errores[] = 'El usuario a editar no existe.';
             } else {
                 $rolActualUsuario = (int) $usuarioActual['id_rol'];
+                $activoActualUsuario = (int) ($usuarioActual['activo_usuario'] ?? 1);
                 $idPersonaUsuario = (int) ($usuarioActual['id_persona'] ?? 0);
                 $nombreUsuarioAnterior = (string) ($usuarioActual['nombre_usuario'] ?? '');
                 $cuilPersonaActual = trim((string) ($usuarioActual['CUIL_persona'] ?? ''));
@@ -68,10 +175,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $modActual === 'usuarios') {
         }
 
         // El sistema nunca puede quedar sin administradores.
-        if (!$errores && $rolActualUsuario === 1 && $idRol !== 1) {
-            $stmt = $pdo->query('SELECT COUNT(*) FROM Usuario WHERE id_rol = 1');
+        if (!$errores && $activoActualUsuario === 1 && $rolActualUsuario === 1 && $idRol !== 1) {
+            $stmt = $pdo->query('SELECT COUNT(*) FROM Usuario WHERE id_rol = 1 AND activo_usuario = 1');
             if ((int) $stmt->fetchColumn() <= 1) {
-                $errores[] = 'No se puede cambiar el perfil del único administrador existente.';
+                $errores[] = 'No se puede cambiar el perfil del único administrador activo.';
             }
         }
 

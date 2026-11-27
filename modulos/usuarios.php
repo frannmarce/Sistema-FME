@@ -14,6 +14,7 @@ $idEditar = (int)($_GET['id'] ?? 0);
                             u.nombre_usuario,
                             u.correo_usuario,
                             u.id_rol,
+                            u.activo_usuario,
                             t.nombre_rol,
                             p.CUIL_persona
                          FROM Usuario u
@@ -33,8 +34,8 @@ $idEditar = (int)($_GET['id'] ?? 0);
   $rolesDisponibles = $stmtRoles->fetchAll();
 
   $esUnicoAdministrador = false;
-  if ($usuarioEdit && (int)$usuarioEdit['id_rol'] === 1) {
-    $stmtAdminCount = $pdo->query('SELECT COUNT(*) FROM Usuario WHERE id_rol = 1');
+  if ($usuarioEdit && (int)$usuarioEdit['activo_usuario'] === 1 && (int)$usuarioEdit['id_rol'] === 1) {
+    $stmtAdminCount = $pdo->query('SELECT COUNT(*) FROM Usuario WHERE id_rol = 1 AND activo_usuario = 1');
     $esUnicoAdministrador = ((int)$stmtAdminCount->fetchColumn() <= 1);
   }
   ?>
@@ -119,11 +120,20 @@ $idEditar = (int)($_GET['id'] ?? 0);
 
               <?php if ($esUnicoAdministrador): ?>
                 <small class="form-help">
-                  Este usuario es el único administrador existente. No se puede cambiar a otro perfil.
+                  Este usuario es el único administrador activo. No se puede cambiar a otro perfil.
                 </small>
               <?php endif; ?>
             </div>
           </div>
+        </div>
+
+        <div class="profile-section">
+          <h3>Estado de la cuenta</h3>
+          <p class="form-help">
+            Estado actual:
+            <strong><?= (int)$usuarioEdit['activo_usuario'] === 1 ? 'Activo' : 'Inactivo' ?></strong>.
+            La activación o baja lógica se administra desde el listado de usuarios.
+          </p>
         </div>
 
         <div class="profile-actions">
@@ -147,7 +157,7 @@ $idEditar = (int)($_GET['id'] ?? 0);
   $rolesFiltro = $stmtRolesFiltro->fetchAll();
   ?>
 
-  <div class="profile-card users-card">
+  <div class="profile-card users-card wide-card">
     <div class="profile-card-header">
       <div class="profile-icon">👥</div>
       <div>
@@ -214,6 +224,17 @@ $idEditar = (int)($_GET['id'] ?? 0);
             </select>
           </div>
         </div>
+
+        <div class="profile-grid">
+          <div class="form-group">
+            <label class="label">Estado</label>
+            <select class="input" name="f_estado">
+              <option value="">Todos</option>
+              <option value="1" <?= (($_GET['f_estado'] ?? '') === '1' ? 'selected' : '') ?>>Activos</option>
+              <option value="0" <?= (($_GET['f_estado'] ?? '') === '0' ? 'selected' : '') ?>>Inactivos</option>
+            </select>
+          </div>
+        </div>
       </div>
 
       <div class="profile-actions">
@@ -259,6 +280,11 @@ $idEditar = (int)($_GET['id'] ?? 0);
       $params[] = $_GET['f_rol'];
     }
 
+    if (isset($_GET['f_estado']) && in_array((string)$_GET['f_estado'], ['0', '1'], true)) {
+      $where .= " AND u.activo_usuario = ?";
+      $params[] = (int)$_GET['f_estado'];
+    }
+
     $countSql = "SELECT COUNT(*)
                  FROM Usuario u
                  LEFT JOIN Persona p ON u.id_persona = p.id_persona
@@ -266,6 +292,7 @@ $idEditar = (int)($_GET['id'] ?? 0);
     $countStmt = $pdo->prepare($countSql);
     $countStmt->execute($params);
     $totalUsuarios = (int)$countStmt->fetchColumn();
+
     $totalPaginas = max(1, (int)ceil($totalUsuarios / $porPagina));
     if ($paginaActual > $totalPaginas) $paginaActual = $totalPaginas;
     $offset = ($paginaActual - 1) * $porPagina;
@@ -274,6 +301,8 @@ $idEditar = (int)($_GET['id'] ?? 0);
                 u.id_usuario,
                 u.nombre_usuario,
                 u.correo_usuario,
+                u.id_rol,
+                u.activo_usuario,
                 t.nombre_rol,
                 p.nombre_persona,
                 p.apellido_persona,
@@ -292,6 +321,10 @@ $idEditar = (int)($_GET['id'] ?? 0);
     $stmt->execute($params);
     $usuarios = $stmt->fetchAll();
 
+    $administradoresActivos = (int)$pdo->query(
+      'SELECT COUNT(*) FROM Usuario WHERE id_rol = 1 AND activo_usuario = 1'
+    )->fetchColumn();
+
     $paginaUrl = static function (int $pagina): string {
       $query = $_GET;
       $query['mod'] = 'usuarios';
@@ -302,6 +335,75 @@ $idEditar = (int)($_GET['id'] ?? 0);
     ?>
 
     <h3 class="result-count">Resultados: <?= $totalUsuarios ?></h3>
+
+    <style>
+      .users-table {
+        min-width: 1250px;
+      }
+
+      .users-table th.actions-col,
+      .users-table td.actions-col {
+        position: sticky;
+        right: 0;
+        z-index: 3;
+        background: #fff;
+        min-width: 190px;
+        white-space: nowrap;
+        box-shadow: -8px 0 12px rgba(15, 23, 42, 0.04);
+      }
+
+      .users-table thead th.actions-col {
+        z-index: 4;
+        background: #f8fafc;
+      }
+
+      .user-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: nowrap;
+      }
+
+      .user-actions form {
+        margin: 0;
+      }
+
+      .user-action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 34px;
+        padding: 7px 11px;
+        border-radius: 8px;
+        border: 1px solid #d6dee8;
+        background: #fff;
+        color: #172033;
+        font: inherit;
+        font-weight: 600;
+        text-decoration: none;
+        cursor: pointer;
+      }
+
+      .user-action-btn:hover {
+        background: #f4f7fb;
+      }
+
+      .user-action-btn.danger {
+        border-color: #f2b8b5;
+        color: #b42318;
+      }
+
+      .user-action-btn.success {
+        border-color: #a7dfc1;
+        color: #067647;
+      }
+
+      .user-action-btn:disabled {
+        cursor: not-allowed;
+        opacity: .5;
+        background: #f5f6f8;
+      }
+    </style>
 
     <div class="table-responsive">
       <table class="result-table users-table">
@@ -316,7 +418,8 @@ $idEditar = (int)($_GET['id'] ?? 0);
             <th>Perfil</th>
             <th>Ciudad</th>
             <th>País</th>
-            <th>Acciones</th>
+            <th>Estado</th>
+            <th class="actions-col">Acciones</th>
           </tr>
         </thead>
 
@@ -336,21 +439,66 @@ $idEditar = (int)($_GET['id'] ?? 0);
               <td><?= htmlspecialchars($u['nombre_rol'] ?? '-') ?></td>
               <td><?= htmlspecialchars($u['nombre_ciudad'] ?? '-') ?></td>
               <td><?= htmlspecialchars($u['nombre_pais'] ?? '-') ?></td>
-
               <td>
-                <a
-                  class="table-action"
-                  href="index.php?mod=usuarios&action=edit&id=<?= (int)$u['id_usuario'] ?>"
-                >
-                  Editar
-                </a>
+                <?php if ((int)$u['activo_usuario'] === 1): ?>
+                  <span title="Usuario habilitado para iniciar sesión">🟢 Activo</span>
+                <?php else: ?>
+                  <span title="Usuario con acceso bloqueado">🔴 Inactivo</span>
+                <?php endif; ?>
+              </td>
+
+              <td class="actions-col">
+                <?php
+                  $esPropioUsuario = (int)$u['id_usuario'] === $userId;
+                  $esUltimoAdminActivo = (int)$u['activo_usuario'] === 1
+                    && (int)$u['id_rol'] === 1
+                    && $administradoresActivos <= 1;
+                ?>
+
+                <div class="user-actions">
+                  <a
+                    class="user-action-btn"
+                    href="index.php?mod=usuarios&action=edit&id=<?= (int)$u['id_usuario'] ?>"
+                  >
+                    Editar
+                  </a>
+
+                  <?php if ((int)$u['activo_usuario'] === 1): ?>
+                    <?php if (!$esPropioUsuario && !$esUltimoAdminActivo): ?>
+                      <form method="post" action="index.php?mod=usuarios" onsubmit="return confirm('¿Desactivar este usuario? Ya no podrá iniciar sesión.');">
+                        <input type="hidden" name="form" value="toggle_usuario_estado">
+                        <input type="hidden" name="id_usuario" value="<?= (int)$u['id_usuario'] ?>">
+                        <input type="hidden" name="nuevo_estado" value="0">
+                        <button class="user-action-btn danger" type="submit">Desactivar</button>
+                      </form>
+                    <?php else: ?>
+                      <button
+                        class="user-action-btn danger"
+                        type="button"
+                        disabled
+                        title="<?= $esPropioUsuario
+                          ? 'No puedes desactivar tu propia cuenta.'
+                          : 'Debe existir al menos un administrador activo.' ?>"
+                      >
+                        Desactivar
+                      </button>
+                    <?php endif; ?>
+                  <?php else: ?>
+                    <form method="post" action="index.php?mod=usuarios" onsubmit="return confirm('¿Reactivar este usuario? Volverá a poder iniciar sesión si su perfil también está activo.');">
+                      <input type="hidden" name="form" value="toggle_usuario_estado">
+                      <input type="hidden" name="id_usuario" value="<?= (int)$u['id_usuario'] ?>">
+                      <input type="hidden" name="nuevo_estado" value="1">
+                      <button class="user-action-btn success" type="submit">Reactivar</button>
+                    </form>
+                  <?php endif; ?>
+                </div>
               </td>
             </tr>
           <?php endforeach; ?>
 
           <?php if (!$usuarios): ?>
             <tr>
-              <td colspan="10">No se encontraron usuarios.</td>
+              <td colspan="11">No se encontraron usuarios.</td>
             </tr>
           <?php endif; ?>
         </tbody>

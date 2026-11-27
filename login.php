@@ -15,7 +15,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
   }
 
   $stmt = $pdo->prepare('SELECT u.id_usuario, u.nombre_usuario, u.contraseña_usuario, u.id_rol, u.email_verificado,
-                                r.activo AS rol_activo
+                                u.activo_usuario, r.activo AS rol_activo
                          FROM Usuario u
                          INNER JOIN Tipo_Rol r ON u.id_rol = r.id_rol
                          WHERE u.nombre_usuario = ?
@@ -25,6 +25,11 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
 
   if(!$row || !password_verify($pass, $row['contraseña_usuario'])){
     flash('error','El usuario no existe o la contraseña es incorrecta.');
+    header('Location: login.php'); exit;
+  }
+
+  if ((int)$row['activo_usuario'] !== 1) {
+    flash('error', 'Tu usuario está inactivo. Contacta a un administrador.');
     header('Location: login.php'); exit;
   }
 
@@ -73,7 +78,7 @@ if($_SERVER['REQUEST_METHOD']==='POST'){
     </div>
     <div class="auth-brand-content">
       <span class="auth-kicker">Acceso al sistema</span>
-      <h2>Bienvenido al Sistema FME.</h2>
+      <h2>Todo tu negocio, organizado en un solo lugar.</h2>
       <p>Gestiona inventario, ventas, movimientos, reportes y permisos desde una interfaz clara y segura.</p>
       <ul class="auth-features">
         <li class="auth-feature"><span class="auth-feature-icon">✓</span><span>Inventario y stock centralizados</span></li>

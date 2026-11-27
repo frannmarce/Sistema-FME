@@ -43,13 +43,26 @@ $rolNombre = (string) $rolActual['nombre_rol'];
 /* =========================
    PERFIL COMPLETO
    ========================= */
-$stmt = $pdo->prepare('SELECT id_persona FROM Usuario WHERE id_usuario = ? LIMIT 1');
+$stmt = $pdo->prepare('SELECT id_persona, activo_usuario FROM Usuario WHERE id_usuario = ? LIMIT 1');
 $stmt->execute([$userId]);
 $rowUsuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$rowUsuario) {
     $_SESSION = [];
     session_destroy();
+    header('Location: login.php');
+    exit;
+}
+
+// Si el usuario fue dado de baja lógica mientras tenía una sesión abierta,
+// su acceso se invalida en la siguiente petición.
+if ((int)($rowUsuario['activo_usuario'] ?? 0) !== 1) {
+    $_SESSION = [];
+    session_destroy();
+    if (session_status() === PHP_SESSION_NONE) {
+        session_start();
+    }
+    flash('error', 'Tu usuario está inactivo. Contacta a un administrador.');
     header('Location: login.php');
     exit;
 }
